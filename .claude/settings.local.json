@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmd /c \"where node\")",
+      "Bash(cmd /c \"where npm\")",
+      "Bash(npm install:*)",
+      "Bash(cmd /c \"cd C:\\\\Users\\\\LoganCarpenter\\\\Documents\\\\GitXO\\\\backend && npm install pg dotenv archiver\")",
+      "Bash(cmd /c \"where npm 2>&1\")",
+      "Bash(powershell -Command:*)",
+      "Bash(echo:*)",
+      "Bash(dotnet restore:*)"
+    ]
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "gitxo-backend",
+  "version": "1.0.0",
+  "description": "GitXO C# backend — use 'npm start' or 'dotnet run' to start",
+  "scripts": {
+    "start": "dotnet run"
+  }
+}
