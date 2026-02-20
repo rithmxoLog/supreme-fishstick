@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
+using System.IO.Compression;
 using System.Security.Claims;
 using GitXO.Api.Services;
 
@@ -9,13 +10,13 @@ namespace GitXO.Api.Controllers;
 [Route("api/repos")]
 public class FilesController : ControllerBase
 {
-    private readonly string _reposDir;
     private readonly ActivityLogger _logger;
+    private readonly RepoDbService _repoDb;
 
-    public FilesController(IConfiguration config, ActivityLogger logger)
+    public FilesController(ActivityLogger logger, RepoDbService repoDb)
     {
-        _reposDir = config["ReposDirectory"]!;
         _logger = logger;
+        _repoDb = repoDb;
     }
 
     private long? GetUserId()
@@ -24,19 +25,33 @@ public class FilesController : ControllerBase
         return long.TryParse(idStr, out var id) ? id : null;
     }
 
-    // GET /api/repos/{name}/files?path=subdir
+    /// <summary>
+    /// Returns true if the current user may read this repo.
+    /// Public repos: always. Private repos: owner or collaborator only.
+    /// Legacy repos (no DB entry): treated as public.
+    /// </summary>
+    private async Task<bool> CanReadRepoAsync(string name)
+    {
+        var meta = await _repoDb.GetRepoMetaAsync(name);
+        if (meta == null) return true;          // legacy / unregistered = public
+        if (meta.IsPublic) return true;
+        var userId = GetUserId();
+        return userId != null && await _repoDb.UserCanWriteAsync(name, userId.Value);
+    }
+
     [HttpGet("{name}/files")]
     public async Task<IActionResult> ListFiles(string name, [FromQuery] string? path)
     {
-        var repoPath = Path.Combine(_reposDir, name);
-        if (!Directory.Exists(repoPath))
+        if (!await CanReadRepoAsync(name))
+            return NotFound(new { error = "Repository not found" });
+
+        var repoPath = await _repoDb.GetRepoPathAsync(name);
+        if (repoPath == null)
             return NotFound(new { error = "Repository not found" });
 
         try
         {
-            var targetPath = string.IsNullOrEmpty(path)
-                ? repoPath
-                : SafeJoin(repoPath, path);
+            var targetPath = string.IsNullOrEmpty(path) ? repoPath : SafeJoin(repoPath, path);
 
             if (!Directory.Exists(targetPath))
                 return NotFound(new { error = "Path not found" });
@@ -63,51 +78,34 @@ public class FilesController : ControllerBase
                 catch { }
 
                 long? size = null;
-                if (!isDir)
-                {
-                    try { size = new FileInfo(x.entry).Length; } catch { }
-                }
+                if (!isDir) { try { size = new FileInfo(x.entry).Length; } catch { } }
 
-                return new
-                {
-                    name = x.name,
-                    path = relPath,
-                    type = isDir ? "directory" : "file",
-                    size,
-                    lastCommit
-                };
+                return new { name = x.name, path = relPath, type = isDir ? "directory" : "file", size, lastCommit };
             });
 
             var files = (await Task.WhenAll(fileTasks))
-                .OrderBy(f => f.type == "directory" ? 0 : 1)
-                .ThenBy(f => f.name)
-                .ToList();
+                .OrderBy(f => f.type == "directory" ? 0 : 1).ThenBy(f => f.name).ToList();
 
             _logger.LogEvent("FILES_LISTED", name, new { path = path ?? "/", fileCount = files.Count });
             return Ok(new { path = path ?? "", files });
         }
-        catch (Exception ex)
-        {
-            return StatusCode(500, new { error = ex.Message });
-        }
+        catch (Exception ex) { return StatusCode(500, new { error = ex.Message }); }
     }
 
-    // GET /api/repos/{name}/file?path=...
     [HttpGet("{name}/file")]
-    public IActionResult GetFile(string name, [FromQuery] string? path)
+    public async Task<IActionResult> GetFile(string name, [FromQuery] string? path)
     {
-        var repoPath = Path.Combine(_reposDir, name);
-        if (!Directory.Exists(repoPath))
+        if (!await CanReadRepoAsync(name))
             return NotFound(new { error = "Repository not found" });
 
-        if (string.IsNullOrEmpty(path))
-            return BadRequest(new { error = "File path required" });
+        var repoPath = await _repoDb.GetRepoPathAsync(name);
+        if (repoPath == null) return NotFound(new { error = "Repository not found" });
+        if (string.IsNullOrEmpty(path)) return BadRequest(new { error = "File path required" });
 
         try
         {
             var fullPath = SafeJoin(repoPath, path);
-            if (!System.IO.File.Exists(fullPath))
-                return NotFound(new { error = "File not found" });
+            if (!System.IO.File.Exists(fullPath)) return NotFound(new { error = "File not found" });
 
             var bytes = System.IO.File.ReadAllBytes(fullPath);
             if (IsBinaryFile(bytes))
@@ -120,20 +118,20 @@ public class FilesController : ControllerBase
             _logger.LogEvent("FILE_ACCESSED", name, new { filePath = path, isBinary = false, size = bytes.Length });
             return Ok(new { path, content, isBinary = false, size = bytes.Length });
         }
-        catch (Exception ex)
-        {
-            return StatusCode(500, new { error = ex.Message });
-        }
+        catch (Exception ex) { return StatusCode(500, new { error = ex.Message }); }
     }
 
-    // POST /api/repos/{name}/file
     [HttpPost("{name}/file")]
     [Authorize]
     public async Task<IActionResult> SaveFile(string name, [FromBody] SaveFileRequest body)
     {
-        var repoPath = Path.Combine(_reposDir, name);
-        if (!Directory.Exists(repoPath))
-            return NotFound(new { error = "Repository not found" });
+        var repoPath = await _repoDb.GetRepoPathAsync(name);
+        if (repoPath == null) return NotFound(new { error = "Repository not found" });
+
+        var userId = GetUserId();
+        if (userId == null) return Unauthorized();
+        if (!await _repoDb.UserCanWriteAsync(name, userId.Value))
+            return StatusCode(403, new { error = "Write access required" });
 
         if (string.IsNullOrEmpty(body.FilePath)) return BadRequest(new { error = "filePath required" });
         if (body.Content == null) return BadRequest(new { error = "content required" });
@@ -161,17 +159,11 @@ public class FilesController : ControllerBase
             await GitRunner.RunAsync(repoPath, "add", relPath);
             await GitRunner.RunAsync(repoPath, "commit", "-m", body.Message, "--", relPath);
 
-            var (logOut, _, _) = await GitRunner.RunAsync(repoPath,
-                "log", "--max-count=1", "--format=%H|%h|%an|%ae|%ai|%s");
+            var (logOut, _, _) = await GitRunner.RunAsync(repoPath, "log", "--max-count=1", "--format=%H|%h|%an|%ae|%ai|%s");
             var commit = GitRunner.ParseLogLine(logOut.Trim());
 
             _logger.LogEvent(isNew ? "FILE_CREATED" : "FILE_UPDATED", name, new
-            {
-                filePath = relPath,
-                commitHash = commit?.ShortHash,
-                commitMessage = body.Message,
-                branch = body.Branch
-            });
+            { filePath = relPath, commitHash = commit?.ShortHash, commitMessage = body.Message, branch = body.Branch });
 
             return Ok(new
             {
@@ -180,21 +172,21 @@ public class FilesController : ControllerBase
                 file = relPath
             });
         }
-        catch (Exception ex)
-        {
-            return StatusCode(500, new { error = ex.Message });
-        }
+        catch (Exception ex) { return StatusCode(500, new { error = ex.Message }); }
     }
 
-    // POST /api/repos/{name}/push  (multipart file upload)
     [HttpPost("{name}/push")]
     [Authorize]
     [RequestSizeLimit(100 * 1024 * 1024)]
     public async Task<IActionResult> Push(string name)
     {
-        var repoPath = Path.Combine(_reposDir, name);
-        if (!Directory.Exists(repoPath))
-            return NotFound(new { error = "Repository not found" });
+        var repoPath = await _repoDb.GetRepoPathAsync(name);
+        if (repoPath == null) return NotFound(new { error = "Repository not found" });
+
+        var userId = GetUserId();
+        if (userId == null) return Unauthorized();
+        if (!await _repoDb.UserCanWriteAsync(name, userId.Value))
+            return StatusCode(403, new { error = "Write access required" });
 
         var form = Request.Form;
         var message = form["message"].FirstOrDefault();
@@ -202,8 +194,7 @@ public class FilesController : ControllerBase
         var authorName = form["authorName"].FirstOrDefault();
         var authorEmail = form["authorEmail"].FirstOrDefault();
 
-        if (string.IsNullOrEmpty(message))
-            return BadRequest(new { error = "Commit message required" });
+        if (string.IsNullOrEmpty(message)) return BadRequest(new { error = "Commit message required" });
 
         try
         {
@@ -218,20 +209,17 @@ public class FilesController : ControllerBase
 
             var filePaths = new List<string>();
 
-            // Handle uploaded files
             foreach (var file in Request.Form.Files)
             {
                 var relativePath = file.FileName;
                 var targetPath = SafeJoin(repoPath, relativePath);
                 var targetDir = System.IO.Path.GetDirectoryName(targetPath)!;
                 if (!Directory.Exists(targetDir)) Directory.CreateDirectory(targetDir);
-
                 await using var stream = System.IO.File.Create(targetPath);
                 await file.CopyToAsync(stream);
                 filePaths.Add(System.IO.Path.GetRelativePath(repoPath, targetPath).Replace('\\', '/'));
             }
 
-            // Handle JSON body file (text content via form fields)
             var fileContent = form["fileContent"].FirstOrDefault();
             var filePath = form["filePath"].FirstOrDefault();
             if (fileContent != null && !string.IsNullOrEmpty(filePath))
@@ -243,8 +231,7 @@ public class FilesController : ControllerBase
                 filePaths.Add(System.IO.Path.GetRelativePath(repoPath, targetPath).Replace('\\', '/'));
             }
 
-            if (filePaths.Count == 0)
-                return BadRequest(new { error = "No files provided" });
+            if (filePaths.Count == 0) return BadRequest(new { error = "No files provided" });
 
             await GitRunner.RunAsync(repoPath, ["add", .. filePaths]);
 
@@ -254,18 +241,11 @@ public class FilesController : ControllerBase
             commitArgs.AddRange(["--", .. filePaths]);
             await GitRunner.RunAsync(repoPath, [.. commitArgs]);
 
-            var (logOut, _, _) = await GitRunner.RunAsync(repoPath,
-                "log", "--max-count=1", "--format=%H|%h|%an|%ae|%ai|%s");
+            var (logOut, _, _) = await GitRunner.RunAsync(repoPath, "log", "--max-count=1", "--format=%H|%h|%an|%ae|%ai|%s");
             var commit = GitRunner.ParseLogLine(logOut.Trim());
 
             _logger.LogEvent("FILES_PUSHED", name, new
-            {
-                fileCount = filePaths.Count,
-                files = filePaths,
-                commitHash = commit?.ShortHash,
-                commitMessage = message,
-                branch
-            });
+            { fileCount = filePaths.Count, files = filePaths, commitHash = commit?.ShortHash, commitMessage = message, branch });
 
             return Ok(new
             {
@@ -274,29 +254,27 @@ public class FilesController : ControllerBase
                 files = filePaths
             });
         }
-        catch (Exception ex)
-        {
-            return StatusCode(500, new { error = ex.Message });
-        }
+        catch (Exception ex) { return StatusCode(500, new { error = ex.Message }); }
     }
 
-    // DELETE /api/repos/{name}/file
     [HttpDelete("{name}/file")]
     [Authorize]
     public async Task<IActionResult> DeleteFile(string name, [FromBody] DeleteFileRequest body)
     {
-        var repoPath = Path.Combine(_reposDir, name);
-        if (!Directory.Exists(repoPath))
-            return NotFound(new { error = "Repository not found" });
+        var repoPath = await _repoDb.GetRepoPathAsync(name);
+        if (repoPath == null) return NotFound(new { error = "Repository not found" });
 
-        if (string.IsNullOrEmpty(body.FilePath))
-            return BadRequest(new { error = "filePath required" });
+        var userId = GetUserId();
+        if (userId == null) return Unauthorized();
+        if (!await _repoDb.UserCanWriteAsync(name, userId.Value))
+            return StatusCode(403, new { error = "Write access required" });
+
+        if (string.IsNullOrEmpty(body.FilePath)) return BadRequest(new { error = "filePath required" });
 
         try
         {
             var fullPath = SafeJoin(repoPath, body.FilePath);
-            if (!System.IO.File.Exists(fullPath))
-                return NotFound(new { error = "File not found" });
+            if (!System.IO.File.Exists(fullPath)) return NotFound(new { error = "File not found" });
 
             var relPath = System.IO.Path.GetRelativePath(repoPath, fullPath).Replace('\\', '/');
             System.IO.File.Delete(fullPath);
@@ -307,47 +285,108 @@ public class FilesController : ControllerBase
             _logger.LogEvent("FILE_DELETED", name, new { filePath = relPath, commitMessage = commitMsg });
             return Ok(new { message = $"File '{relPath}' deleted and committed" });
         }
-        catch (Exception ex)
-        {
-            return StatusCode(500, new { error = ex.Message });
-        }
+        catch (Exception ex) { return StatusCode(500, new { error = ex.Message }); }
     }
 
-    // GET /api/repos/{name}/download/file?path=...
     [HttpGet("{name}/download/file")]
-    public IActionResult DownloadFile(string name, [FromQuery] string? path)
+    public async Task<IActionResult> DownloadFile(string name, [FromQuery] string? path)
     {
-        var repoPath = Path.Combine(_reposDir, name);
-        if (!Directory.Exists(repoPath))
+        if (!await CanReadRepoAsync(name))
             return NotFound(new { error = "Repository not found" });
 
-        if (string.IsNullOrEmpty(path))
-            return BadRequest(new { error = "File path required" });
+        var repoPath = await _repoDb.GetRepoPathAsync(name);
+        if (repoPath == null) return NotFound(new { error = "Repository not found" });
+        if (string.IsNullOrEmpty(path)) return BadRequest(new { error = "File path required" });
 
         try
         {
             var fullPath = SafeJoin(repoPath, path);
-            if (!System.IO.File.Exists(fullPath))
-                return NotFound(new { error = "File not found" });
-
+            if (!System.IO.File.Exists(fullPath)) return NotFound(new { error = "File not found" });
             var fileName = System.IO.Path.GetFileName(fullPath);
             _logger.LogEvent("FILE_DOWNLOADED", name, new { filePath = path });
-
             var bytes = System.IO.File.ReadAllBytes(fullPath);
             return File(bytes, "application/octet-stream", fileName);
         }
-        catch (Exception ex)
-        {
-            return StatusCode(500, new { error = ex.Message });
-        }
+        catch (Exception ex) { return StatusCode(500, new { error = ex.Message }); }
     }
 
-    // GET /api/repos/{name}/download?branch=...
+    [HttpGet("{name}/download/folder")]
+    public async Task DownloadFolder(string name, [FromQuery] string? path, [FromQuery] string? branch)
+    {
+        if (!await CanReadRepoAsync(name))
+        {
+            Response.StatusCode = 404;
+            await Response.WriteAsJsonAsync(new { error = "Repository not found" });
+            return;
+        }
+
+        var repoPath = await _repoDb.GetRepoPathAsync(name);
+        if (repoPath == null)
+        {
+            Response.StatusCode = 404;
+            await Response.WriteAsJsonAsync(new { error = "Repository not found" });
+            return;
+        }
+
+        var (current, all) = await GitRunner.GetBranchesAsync(repoPath);
+        var targetBranch = branch ?? current;
+
+        if (!all.Contains(targetBranch))
+        {
+            Response.StatusCode = 404;
+            await Response.WriteAsJsonAsync(new { error = $"Branch '{targetBranch}' not found" });
+            return;
+        }
+
+        // Empty path = whole repo
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            var zipName = $"{name}-{targetBranch}.zip";
+            Response.ContentType = "application/zip";
+            Response.Headers.ContentDisposition = $"attachment; filename=\"{zipName}\"";
+            using var proc = GitRunner.StartStreaming(repoPath, "archive", "--format=zip", targetBranch);
+            await proc.StandardOutput.BaseStream.CopyToAsync(Response.Body);
+            await proc.WaitForExitAsync();
+            if (proc.ExitCode == 0)
+                _logger.LogEvent("REPO_DOWNLOADED", name, new { branch = targetBranch });
+            return;
+        }
+
+        // Validate path (prevent traversal)
+        try { SafeJoin(repoPath, path); }
+        catch
+        {
+            Response.StatusCode = 400;
+            await Response.WriteAsJsonAsync(new { error = "Invalid path" });
+            return;
+        }
+
+        var cleanPath = path.Replace('\\', '/').Trim('/');
+        var folderName = System.IO.Path.GetFileName(cleanPath);
+        var zipFileName = $"{name}-{folderName}-{targetBranch}.zip";
+
+        Response.ContentType = "application/zip";
+        Response.Headers.ContentDisposition = $"attachment; filename=\"{zipFileName}\"";
+
+        using var folderProc = GitRunner.StartStreaming(repoPath, "archive", "--format=zip", targetBranch, "--", cleanPath);
+        await folderProc.StandardOutput.BaseStream.CopyToAsync(Response.Body);
+        await folderProc.WaitForExitAsync();
+        if (folderProc.ExitCode == 0)
+            _logger.LogEvent("FOLDER_DOWNLOADED", name, new { path = cleanPath, branch = targetBranch });
+    }
+
     [HttpGet("{name}/download")]
     public async Task DownloadRepo(string name, [FromQuery] string? branch)
     {
-        var repoPath = Path.Combine(_reposDir, name);
-        if (!Directory.Exists(repoPath))
+        if (!await CanReadRepoAsync(name))
+        {
+            Response.StatusCode = 404;
+            await Response.WriteAsJsonAsync(new { error = "Repository not found" });
+            return;
+        }
+
+        var repoPath = await _repoDb.GetRepoPathAsync(name);
+        if (repoPath == null)
         {
             Response.StatusCode = 404;
             await Response.WriteAsJsonAsync(new { error = "Repository not found" });
@@ -371,9 +410,116 @@ public class FilesController : ControllerBase
         using var proc = GitRunner.StartStreaming(repoPath, "archive", "--format=zip", targetBranch);
         await proc.StandardOutput.BaseStream.CopyToAsync(Response.Body);
         await proc.WaitForExitAsync();
-
         if (proc.ExitCode == 0)
             _logger.LogEvent("REPO_DOWNLOADED", name, new { branch = targetBranch });
+    }
+
+    [HttpPost("{name}/upload-zip")]
+    [Authorize]
+    [RequestSizeLimit(200 * 1024 * 1024)]
+    public async Task<IActionResult> UploadZip(string name)
+    {
+        var repoPath = await _repoDb.GetRepoPathAsync(name);
+        if (repoPath == null) return NotFound(new { error = "Repository not found" });
+
+        var userId = GetUserId();
+        if (userId == null) return Unauthorized();
+        if (!await _repoDb.UserCanWriteAsync(name, userId.Value))
+            return StatusCode(403, new { error = "Write access required" });
+
+        var form = Request.Form;
+        var message = form["message"].FirstOrDefault();
+        var branch  = form["branch"].FirstOrDefault();
+
+        if (string.IsNullOrEmpty(message)) return BadRequest(new { error = "Commit message required" });
+
+        var zipFile = Request.Form.Files.Count > 0 ? Request.Form.Files[0] : null;
+        if (zipFile == null) return BadRequest(new { error = "No zip file provided" });
+        if (!zipFile.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { error = "Only .zip files are accepted" });
+
+        try
+        {
+            if (!string.IsNullOrEmpty(branch))
+            {
+                var (_, allBranches) = await GitRunner.GetBranchesAsync(repoPath);
+                if (allBranches.Contains(branch))
+                    await GitRunner.RunAsync(repoPath, "checkout", branch);
+                else
+                    await GitRunner.RunAsync(repoPath, "checkout", "-b", branch);
+            }
+
+            var extractedPaths = new List<string>();
+
+            await using var stream = zipFile.OpenReadStream();
+            using var archive = new ZipArchive(stream, ZipArchiveMode.Read);
+
+            // Detect common top-level folder prefix so we can strip it (e.g. "myproject-main/")
+            var allEntries = archive.Entries
+                .Where(e => !string.IsNullOrEmpty(e.Name))   // skip directory entries
+                .ToList();
+
+            string stripPrefix = "";
+            var firstSegments = allEntries
+                .Select(e => e.FullName.Split('/')[0])
+                .Distinct()
+                .ToList();
+            if (firstSegments.Count == 1 && allEntries.All(e => e.FullName.Contains('/')))
+                stripPrefix = firstSegments[0] + "/";
+
+            foreach (var entry in allEntries)
+            {
+                var entryPath = entry.FullName.Replace('\\', '/');
+                if (stripPrefix.Length > 0 && entryPath.StartsWith(stripPrefix))
+                    entryPath = entryPath[stripPrefix.Length..];
+
+                if (string.IsNullOrWhiteSpace(entryPath)) continue;
+
+                // Skip node_modules directories
+                if (entryPath.StartsWith("node_modules/", StringComparison.OrdinalIgnoreCase) ||
+                    entryPath.Contains("/node_modules/", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var destPath = SafeJoin(repoPath, entryPath);
+                var destDir  = System.IO.Path.GetDirectoryName(destPath)!;
+                if (!Directory.Exists(destDir)) Directory.CreateDirectory(destDir);
+
+                await using var entryStream = entry.Open();
+                await using var destStream  = System.IO.File.Create(destPath);
+                await entryStream.CopyToAsync(destStream);
+
+                extractedPaths.Add(System.IO.Path.GetRelativePath(repoPath, destPath).Replace('\\', '/'));
+            }
+
+            if (extractedPaths.Count == 0)
+                return BadRequest(new { error = "Zip contained no files" });
+
+            await GitRunner.RunAsync(repoPath, ["add", .. extractedPaths]);
+
+            await GitRunner.RunAsync(repoPath, "commit", "-m", message);
+
+            var (logOut, _, _) = await GitRunner.RunAsync(repoPath, "log", "--max-count=1", "--format=%H|%h|%an|%ae|%ai|%s");
+            var commit = GitRunner.ParseLogLine(logOut.Trim());
+
+            _logger.LogEvent("ZIP_UPLOADED", name, new
+            {
+                fileCount = extractedPaths.Count,
+                strippedPrefix = stripPrefix,
+                commitHash = commit?.ShortHash,
+                commitMessage = message,
+                branch
+            });
+
+            return Ok(new
+            {
+                message = $"Extracted and committed {extractedPaths.Count} file(s)",
+                commit = commit == null ? null : new { hash = commit.ShortHash, message = commit.Message, date = commit.Date },
+                files = extractedPaths,
+                strippedPrefix = stripPrefix.TrimEnd('/')
+            });
+        }
+        catch (InvalidDataException) { return BadRequest(new { error = "Invalid or corrupt zip file" }); }
+        catch (Exception ex) { return StatusCode(500, new { error = ex.Message }); }
     }
 
     private static string SafeJoin(string basePath, string userPath)
@@ -390,8 +536,7 @@ public class FilesController : ControllerBase
         var limit = Math.Min(bytes.Length, 512);
         for (var i = 0; i < limit; i++)
         {
-            var b = bytes[i];
-            if (b == 0) return true;
+            var b = bytes[i]; if (b == 0) return true;
             if (b < 8 || (b > 13 && b < 32 && b != 27)) return true;
         }
         return false;

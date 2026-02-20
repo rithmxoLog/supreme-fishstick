@@ -9,13 +9,11 @@ namespace GitXO.Api.Controllers;
 [Route("api/repos")]
 public class ReposController : ControllerBase
 {
-    private readonly string _reposDir;
     private readonly ActivityLogger _logger;
     private readonly RepoDbService _repoDb;
 
-    public ReposController(IConfiguration config, ActivityLogger logger, RepoDbService repoDb)
+    public ReposController(ActivityLogger logger, RepoDbService repoDb)
     {
-        _reposDir = config["ReposDirectory"]!;
         _logger = logger;
         _repoDb = repoDb;
     }
@@ -32,31 +30,36 @@ public class ReposController : ControllerBase
     {
         try
         {
-            if (!Directory.Exists(_reposDir))
-                return Ok(Array.Empty<object>());
-
             var userId = GetUserId();
             var repos = new List<object>();
 
-            foreach (var dir in Directory.GetDirectories(_reposDir))
+            // We enumerate known repos from DB plus any legacy unregistered repos
+            // by scanning both directories
+            var allDirs = new List<string>();
+            var publicDir  = _repoDb.GetTargetDir(true);
+            var privateDir = _repoDb.GetTargetDir(false);
+
+            if (Directory.Exists(publicDir))
+                allDirs.AddRange(Directory.GetDirectories(publicDir));
+            if (Directory.Exists(privateDir))
+                allDirs.AddRange(Directory.GetDirectories(privateDir));
+
+            foreach (var dir in allDirs)
             {
                 if (!Directory.Exists(Path.Combine(dir, ".git"))) continue;
 
                 var name = Path.GetFileName(dir);
 
-                // Apply search filter
                 if (!string.IsNullOrEmpty(search) &&
                     !name.Contains(search, StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                // Get DB metadata
                 var meta = await _repoDb.GetRepoMetaAsync(name);
 
-                // If private: only show to owner
+                // Private: only show to owner or collaborators
                 if (meta is { IsPublic: false } && meta.OwnerId != userId)
                     continue;
 
-                // Apply publicOnly filter
                 if (publicOnly == true && meta != null && !meta.IsPublic)
                     continue;
 
@@ -89,8 +92,8 @@ public class ReposController : ControllerBase
                         description = "",
                         branches = Array.Empty<string>(),
                         lastCommit = (object?)null,
-                        isPublic = true,
-                        owner = (string?)null
+                        isPublic = meta?.IsPublic ?? true,
+                        owner = meta?.OwnerUsername
                     });
                 }
             }
@@ -108,15 +111,14 @@ public class ReposController : ControllerBase
     [HttpGet("{name}")]
     public async Task<IActionResult> GetRepo(string name)
     {
-        var repoPath = Path.Combine(_reposDir, name);
-        if (!Directory.Exists(repoPath))
-            return NotFound(new { error = "Repository not found" });
-
         var userId = GetUserId();
         var meta = await _repoDb.GetRepoMetaAsync(name);
 
-        // Private repo: only owner can access
         if (meta is { IsPublic: false } && meta.OwnerId != userId)
+            return NotFound(new { error = "Repository not found" });
+
+        var repoPath = await _repoDb.GetRepoPathAsync(name);
+        if (repoPath == null)
             return NotFound(new { error = "Repository not found" });
 
         try
@@ -133,6 +135,8 @@ public class ReposController : ControllerBase
                 branchCount = all.Count
             }, userId);
 
+            var canWrite = userId != null && await _repoDb.UserCanWriteAsync(name, userId.Value);
+
             return Ok(new
             {
                 name,
@@ -141,7 +145,8 @@ public class ReposController : ControllerBase
                 branches = all,
                 lastCommit,
                 isPublic = meta?.IsPublic ?? true,
-                owner = meta?.OwnerUsername
+                owner = meta?.OwnerUsername,
+                canWrite
             });
         }
         catch (Exception ex)
@@ -162,9 +167,14 @@ public class ReposController : ControllerBase
         if (string.IsNullOrWhiteSpace(name) || !System.Text.RegularExpressions.Regex.IsMatch(name, @"^[a-zA-Z0-9_\-\.]+$"))
             return BadRequest(new { error = "Invalid repository name. Use alphanumeric characters, dashes, underscores, or dots." });
 
-        var repoPath = Path.Combine(_reposDir, name);
-        if (Directory.Exists(repoPath))
+        // Check if repo already exists in either directory
+        var existingPath = await _repoDb.GetRepoPathAsync(name);
+        if (existingPath != null)
             return Conflict(new { error = "Repository already exists" });
+
+        var isPublic = body.IsPublic ?? true;
+        var targetDir = _repoDb.GetTargetDir(isPublic);
+        var repoPath = Path.Combine(targetDir, name);
 
         try
         {
@@ -173,6 +183,8 @@ public class ReposController : ControllerBase
             await GitRunner.RunAsync(repoPath, "init");
             await GitRunner.RunAsync(repoPath, "config", "user.name", "GitXO User");
             await GitRunner.RunAsync(repoPath, "config", "user.email", "gitxo@local");
+            // Allow git push to update the working tree when the target branch is checked out
+            await GitRunner.RunAsync(repoPath, "config", "receive.denyCurrentBranch", "updateInstead");
 
             if (!string.IsNullOrWhiteSpace(body.Description))
                 await System.IO.File.WriteAllTextAsync(
@@ -184,11 +196,11 @@ public class ReposController : ControllerBase
             await GitRunner.RunAsync(repoPath, "add", "README.md");
             await GitRunner.RunAsync(repoPath, "commit", "-m", "Initial commit");
 
-            // Register in DB
-            await _repoDb.CreateRepoMetaAsync(name, userId.Value, body.IsPublic ?? true, body.Description);
+            await _repoDb.CreateRepoMetaAsync(name, userId.Value, isPublic, body.Description);
 
-            _logger.LogEvent("REPO_CREATED", name, new { description = body.Description, isPublic = body.IsPublic ?? true }, userId);
-            return StatusCode(201, new { name, description = body.Description, message = "Repository created successfully" });
+            _logger.LogEvent("REPO_CREATED", name,
+                new { description = body.Description, isPublic }, userId);
+            return StatusCode(201, new { name, description = body.Description, isPublic, message = "Repository created successfully" });
         }
         catch (Exception ex)
         {
@@ -203,26 +215,21 @@ public class ReposController : ControllerBase
     [Authorize]
     public async Task<IActionResult> DeleteRepo(string name)
     {
-        var repoPath = Path.Combine(_reposDir, name);
-        if (!Directory.Exists(repoPath))
-            return NotFound(new { error = "Repository not found" });
-
         var userId = GetUserId();
         var meta = await _repoDb.GetRepoMetaAsync(name);
-
         var isAdmin = User.FindFirstValue("is_admin") == "true";
 
-        // Repo not in DB: only admins may delete it
         if (meta == null && !isAdmin)
             return Forbid();
-
-        // Repo in DB: only the owner or an admin may delete it
         if (meta != null && meta.OwnerId != userId && !isAdmin)
             return Forbid();
 
+        var repoPath = await _repoDb.GetRepoPathAsync(name);
+        if (repoPath == null)
+            return NotFound(new { error = "Repository not found" });
+
         try
         {
-            // Force-delete read-only git files on Windows
             DeleteDirectory(repoPath);
             await _repoDb.DeleteRepoMetaAsync(name);
             _logger.LogEvent("REPO_DELETED", name, new { }, userId);
@@ -237,9 +244,7 @@ public class ReposController : ControllerBase
     private static void DeleteDirectory(string path)
     {
         foreach (var file in Directory.GetFiles(path, "*", SearchOption.AllDirectories))
-        {
             System.IO.File.SetAttributes(file, FileAttributes.Normal);
-        }
         Directory.Delete(path, recursive: true);
     }
 

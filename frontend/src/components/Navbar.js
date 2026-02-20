@@ -58,15 +58,14 @@ export default function Navbar() {
                   <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{user.email}</div>
                 </div>
                 <div className="dropdown-divider" />
+                <Link to="/settings" className="dropdown-item" onClick={() => setMenuOpen(false)}>Settings</Link>
+                <div className="dropdown-divider" />
                 <button className="dropdown-item" onClick={handleLogout}>Sign out</button>
               </div>
             )}
           </div>
         ) : (
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Link to="/login" className="btn btn-sm">Sign in</Link>
-            <Link to="/register" className="btn btn-primary btn-sm">Sign up</Link>
-          </div>
+          <Link to="/login" className="btn btn-sm">Sign in</Link>
         )}
       </div>
     </nav>

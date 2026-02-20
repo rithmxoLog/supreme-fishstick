@@ -28,7 +28,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateIssuerSigningKey = true,
             ValidIssuer = jwtSection["Issuer"] ?? "GitXO",
             ValidAudience = jwtSection["Audience"] ?? "GitXO",
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret))
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
+            ClockSkew = TimeSpan.FromMinutes(1)
         };
     });
 
@@ -38,16 +39,20 @@ builder.Services.AddSingleton<ActivityLogger>();
 builder.Services.AddSingleton<AuthService>();
 builder.Services.AddSingleton<RepoDbService>();
 
-// Ensure repositories directory exists
-var reposDir = builder.Configuration["ReposDirectory"] ?? "repositories";
-if (!Path.IsPathRooted(reposDir))
-    reposDir = Path.GetFullPath(reposDir, Directory.GetCurrentDirectory());
+// Resolve and ensure repository directories exist
+static string ResolveDir(IConfiguration cfg, string key, string fallback)
+{
+    var dir = cfg[key] ?? fallback;
+    if (!Path.IsPathRooted(dir))
+        dir = Path.GetFullPath(dir, Directory.GetCurrentDirectory());
+    if (!Directory.Exists(dir))
+        Directory.CreateDirectory(dir);
+    cfg[key] = dir;
+    return dir;
+}
 
-if (!Directory.Exists(reposDir))
-    Directory.CreateDirectory(reposDir);
-
-// Store resolved path back for controllers to use
-builder.Configuration["ReposDirectory"] = reposDir;
+var reposDir        = ResolveDir(builder.Configuration, "ReposDirectory",        "repositories");
+var privateReposDir = ResolveDir(builder.Configuration, "PrivateReposDirectory", "repositories-private");
 
 var app = builder.Build();
 
@@ -61,6 +66,7 @@ app.UseAuthorization();
 app.MapControllers();
 
 Console.WriteLine($"GitXO backend running at http://localhost:3001");
-Console.WriteLine($"Repositories stored at: {reposDir}");
+Console.WriteLine($"Public repositories:  {reposDir}");
+Console.WriteLine($"Private repositories: {privateReposDir}");
 
 app.Run();

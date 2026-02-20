@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { api } from '../api';
+import { html as diff2html } from 'diff2html';
+import 'diff2html/bundles/css/diff2html.min.css';
 
 export default function BranchManager({ repoName, repo, currentBranch, onCheckout, onRefresh }) {
   const [showCreate, setShowCreate] = useState(false);
@@ -14,6 +16,13 @@ export default function BranchManager({ repoName, repo, currentBranch, onCheckou
   const [merging, setMerging] = useState(false);
   const [mergeError, setMergeError] = useState('');
   const [mergeSuccess, setMergeSuccess] = useState('');
+
+  // Compare state
+  const [compareFrom, setCompareFrom] = useState('');
+  const [compareTo, setCompareTo] = useState(currentBranch);
+  const [compareResult, setCompareResult] = useState(null);
+  const [comparing, setComparing] = useState(false);
+  const [compareError, setCompareError] = useState('');
 
   const branches = repo.branches || [];
 
@@ -65,6 +74,23 @@ export default function BranchManager({ repoName, repo, currentBranch, onCheckou
     }
   };
 
+  const handleCompare = async (e) => {
+    e.preventDefault();
+    if (!compareFrom || !compareTo || compareFrom === compareTo) {
+      setCompareError('Select two different branches to compare');
+      return;
+    }
+    setComparing(true); setCompareError(''); setCompareResult(null);
+    try {
+      const result = await api.getBranchDiff(repoName, compareFrom, compareTo);
+      setCompareResult(result);
+    } catch (e) {
+      setCompareError(e.message);
+    } finally {
+      setComparing(false);
+    }
+  };
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -100,6 +126,78 @@ export default function BranchManager({ repoName, repo, currentBranch, onCheckou
           </li>
         ))}
       </ul>
+
+      {/* Compare branches */}
+      {branches.length >= 2 && (
+        <div style={{ marginTop: 24, padding: '16px', background: 'var(--bg-canvas)', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 12 }}>Compare branches</div>
+          <form onSubmit={handleCompare} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>From</label>
+              <select className="form-select" style={{ minWidth: 140 }} value={compareFrom} onChange={e => setCompareFrom(e.target.value)} required>
+                <option value="">— select —</option>
+                {branches.map(b => <option key={b} value={b}>{b}</option>)}
+              </select>
+            </div>
+            <div style={{ paddingBottom: 4, color: 'var(--text-secondary)' }}>→</div>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>To</label>
+              <select className="form-select" style={{ minWidth: 140 }} value={compareTo} onChange={e => setCompareTo(e.target.value)}>
+                {branches.map(b => <option key={b} value={b}>{b}</option>)}
+              </select>
+            </div>
+            <button type="submit" className="btn btn-primary btn-sm" disabled={comparing || !compareFrom} style={{ marginBottom: 1 }}>
+              {comparing ? <><span className="spinner" /> Comparing…</> : 'Compare'}
+            </button>
+          </form>
+
+          {compareError && <div className="error-banner" style={{ marginTop: 10 }}>{compareError}</div>}
+
+          {compareResult && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 }}>
+                <span className="branch-badge">{compareResult.from}</span>
+                {' → '}
+                <span className="branch-badge">{compareResult.to}</span>
+                {' — '}
+                {compareResult.commits.length} commit{compareResult.commits.length !== 1 ? 's' : ''} ahead
+              </div>
+
+              {compareResult.commits.length > 0 && (
+                <ul className="commit-list" style={{ marginBottom: 16 }}>
+                  {compareResult.commits.map(c => (
+                    <li key={c.hash} className="commit-item">
+                      <div>
+                        <div className="commit-msg">{c.message}</div>
+                        <div className="commit-sub">{c.author} · {new Date(c.date).toLocaleDateString()}</div>
+                      </div>
+                      <span className="commit-hash">{c.shortHash}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {compareResult.diff ? (
+                <div
+                  className="diff2html-wrapper"
+                  dangerouslySetInnerHTML={{
+                    __html: diff2html(compareResult.diff, {
+                      drawFileList: true,
+                      matching: 'lines',
+                      outputFormat: 'side-by-side',
+                      renderNothingWhenEmpty: false,
+                    })
+                  }}
+                />
+              ) : (
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                  No file differences between these branches.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Create Branch Modal */}
       {showCreate && (

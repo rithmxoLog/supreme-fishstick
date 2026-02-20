@@ -1,10 +1,41 @@
 const BASE = '/api';
 
-function getToken() {
-  return localStorage.getItem('gitxo_token');
+const ACCESS_KEY  = 'gitxo_access_token';
+const REFRESH_KEY = 'gitxo_refresh_token';
+
+function getToken() { return localStorage.getItem(ACCESS_KEY); }
+
+// Attempt to get a new access token using the stored refresh token.
+// Updates localStorage on success. Dispatches 'gitxoAuthExpired' on failure.
+async function tryRefresh() {
+  const refreshToken = localStorage.getItem(REFRESH_KEY);
+  if (!refreshToken) {
+    window.dispatchEvent(new Event('gitxoAuthExpired'));
+    return false;
+  }
+  try {
+    const r = await fetch(`${BASE}/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken })
+    });
+    if (!r.ok) {
+      localStorage.removeItem(ACCESS_KEY);
+      localStorage.removeItem(REFRESH_KEY);
+      window.dispatchEvent(new Event('gitxoAuthExpired'));
+      return false;
+    }
+    const data = await r.json();
+    localStorage.setItem(ACCESS_KEY,  data.accessToken);
+    localStorage.setItem(REFRESH_KEY, data.refreshToken);
+    return true;
+  } catch {
+    window.dispatchEvent(new Event('gitxoAuthExpired'));
+    return false;
+  }
 }
 
-async function request(method, path, body, isFormData = false) {
+async function request(method, path, body, isFormData = false, _retry = true) {
   const opts = { method, headers: {} };
 
   const token = getToken();
@@ -18,6 +49,14 @@ async function request(method, path, body, isFormData = false) {
   }
 
   const res = await fetch(`${BASE}${path}`, opts);
+
+  // Auto-refresh on 401
+  if (res.status === 401 && _retry) {
+    const refreshed = await tryRefresh();
+    if (refreshed) return request(method, path, body, isFormData, false);
+    throw new Error('Session expired. Please sign in again.');
+  }
+
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
@@ -25,11 +64,33 @@ async function request(method, path, body, isFormData = false) {
 
 export const api = {
   // ── Auth ──────────────────────────────────────────────────
-  register: (username, email, password) =>
-    request('POST', '/auth/register', { username, email, password }),
   login: (email, password) =>
     request('POST', '/auth/login', { email, password }),
+  register: (username, email, password) =>
+    request('POST', '/auth/register', { username, email, password }),
+  refresh: (refreshToken) =>
+    request('POST', '/auth/refresh', { refreshToken }),
+  logout: (refreshToken) =>
+    request('POST', '/auth/logout', { refreshToken }),
   getMe: () => request('GET', '/auth/me'),
+
+  // ── Profile & Settings ────────────────────────────────────
+  updateProfile: (displayName, bio, avatarUrl) =>
+    request('PUT', '/auth/profile', { displayName, bio, avatarUrl }),
+  changePassword: (currentPassword, newPassword) =>
+    request('PUT', '/auth/password', { currentPassword, newPassword }),
+  changeEmail: (currentPassword, newEmail) =>
+    request('PUT', '/auth/email', { currentPassword, newEmail }),
+  getSettings: () => request('GET', '/auth/settings'),
+  updateSettings: (settings) => request('PUT', '/auth/settings', settings),
+
+  // ── Sessions ──────────────────────────────────────────────
+  getSessions: () => request('GET', '/auth/sessions'),
+  revokeSession: (id) => request('DELETE', `/auth/sessions/${id}`),
+
+  // ── Admin: User management ────────────────────────────────
+  listUsers: () => request('GET', '/auth/users'),
+  deleteUser: (id) => request('DELETE', `/auth/users/${id}`),
 
   // ── Repos ─────────────────────────────────────────────────
   listRepos: (search, publicOnly) => {
@@ -53,7 +114,7 @@ export const api = {
   deleteFile: (repo, filePath, message) =>
     request('DELETE', `/repos/${repo}/file`, { filePath, message }),
 
-  // ── Push (multipart upload) ───────────────────────────────
+  // ── Push ─────────────────────────────────────────────────
   pushFiles: (repo, files, message, branch, authorName, authorEmail) => {
     const form = new FormData();
     form.append('message', message);
@@ -62,6 +123,13 @@ export const api = {
     if (authorEmail) form.append('authorEmail', authorEmail);
     for (const f of files) form.append('files', f.file, f.targetPath);
     return request('POST', `/repos/${repo}/push`, form, true);
+  },
+  uploadZip: (repo, zipFile, message, branch) => {
+    const form = new FormData();
+    form.append('message', message);
+    if (branch) form.append('branch', branch);
+    form.append('file', zipFile, zipFile.name);
+    return request('POST', `/repos/${repo}/upload-zip`, form, true);
   },
 
   // ── Branches ──────────────────────────────────────────────
@@ -80,6 +148,8 @@ export const api = {
     request('GET', `/repos/${repo}/commits?${branch ? `branch=${encodeURIComponent(branch)}&` : ''}limit=${limit}`),
   getCommit: (repo, hash) =>
     request('GET', `/repos/${repo}/commits/${hash}`),
+  getBranchDiff: (repo, from, to) =>
+    request('GET', `/repos/${repo}/diff?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
 
   // ── Issues ────────────────────────────────────────────────
   listIssues: (repo, status) =>
@@ -106,9 +176,11 @@ export const api = {
   },
   getLogEventTypes: () => request('GET', '/logs/event-types'),
 
-  // ── Download URL helpers ──────────────────────────────────
+  // ── Download URLs ─────────────────────────────────────────
   getFileDownloadUrl: (repo, filePath, branch) =>
     `/api/repos/${repo}/download/file?path=${encodeURIComponent(filePath)}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}`,
   getRepoDownloadUrl: (repo, branch) =>
     `/api/repos/${repo}/download${branch ? `?branch=${encodeURIComponent(branch)}` : ''}`,
+  getFolderDownloadUrl: (repo, folderPath, branch) =>
+    `/api/repos/${repo}/download/folder?path=${encodeURIComponent(folderPath)}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}`,
 };

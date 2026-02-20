@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function LoginPage() {
@@ -68,9 +68,6 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <div className="auth-footer">
-          New to GitXO? <Link to="/register">Create an account</Link>
-        </div>
       </div>
     </div>
   );

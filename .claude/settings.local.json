@@ -8,7 +8,15 @@
       "Bash(cmd /c \"where npm 2>&1\")",
       "Bash(powershell -Command:*)",
       "Bash(echo:*)",
-      "Bash(dotnet restore:*)"
+      "Bash(dotnet restore:*)",
+      "Bash(\"c:/Users/LoganCarpenter/Documents/GitXO/backend/Program.cs\":*)",
+      "Bash(pwsh --version)",
+      "Bash(node --version:*)",
+      "Bash(node -e \"require\\(''fs''\\).writeFileSync\\(''/tmp/write_files.js'', ''console.log\\(42\\)''\\)\")",
+      "Bash(node:*)",
+      "Bash(psql:*)",
+      "Bash(where:*)",
+      "Bash(\"/c/Program Files/PostgreSQL/18/bin/psql.exe\" -U postgres -d gitxo -f backend/Migrations/002_refresh_tokens.sql)"
     ]
   }
 }

@@ -5,6 +5,8 @@ namespace GitXO.Api.Services;
 public class RepoDbService
 {
     private readonly string _connectionString;
+    private readonly string _publicReposDir;
+    private readonly string _privateReposDir;
 
     public RepoDbService(IConfiguration config)
     {
@@ -15,7 +17,43 @@ public class RepoDbService
             $"Database={pg["Database"] ?? "gitxo"};" +
             $"Username={pg["Username"] ?? "postgres"};" +
             $"Password={pg["Password"] ?? ""}";
+
+        _publicReposDir  = config["ReposDirectory"]        ?? "repositories";
+        _privateReposDir = config["PrivateReposDirectory"] ?? "repositories-private";
     }
+
+    /// <summary>
+    /// Resolves the filesystem path for a repository by name.
+    /// Checks the database for is_public, then searches the appropriate directory.
+    /// Falls back to checking both directories for legacy/migrated repos.
+    /// Returns null if the repo cannot be found on disk.
+    /// </summary>
+    public async Task<string?> GetRepoPathAsync(string name)
+    {
+        var meta = await GetRepoMetaAsync(name);
+        if (meta != null)
+        {
+            // Check the correct directory first
+            var primary = Path.Combine(meta.IsPublic ? _publicReposDir : _privateReposDir, name);
+            if (Directory.Exists(primary)) return primary;
+
+            // Fallback: repo may exist in old location (e.g. before split was introduced)
+            var fallback = Path.Combine(meta.IsPublic ? _privateReposDir : _publicReposDir, name);
+            if (Directory.Exists(fallback)) return fallback;
+        }
+        else
+        {
+            // Legacy / unregistered repos live in the public directory
+            var legacy = Path.Combine(_publicReposDir, name);
+            if (Directory.Exists(legacy)) return legacy;
+        }
+
+        return null;
+    }
+
+    /// <summary>Returns the base directory where a new repository should be created.</summary>
+    public string GetTargetDir(bool isPublic) =>
+        isPublic ? _publicReposDir : _privateReposDir;
 
     public async Task<RepoMeta?> GetRepoMetaAsync(string name)
     {
@@ -107,7 +145,6 @@ public class RepoDbService
         catch { return false; }
     }
 
-    // Get a repo's DB id by name
     public async Task<long?> GetRepoIdAsync(string name)
     {
         try

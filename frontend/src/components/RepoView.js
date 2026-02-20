@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import FileBrowser from './FileBrowser';
@@ -8,17 +8,15 @@ import BranchManager from './BranchManager';
 import PushPanel from './PushPanel';
 import IssuesPage from '../pages/IssuesPage';
 
-const TABS = ['Code', 'Commits', 'Branches', 'Issues', 'Push'];
-
 export default function RepoView() {
   const { repoName } = useParams();
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [repo, setRepo] = useState(null);
   const [tab, setTab] = useState('Code');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [currentBranch, setCurrentBranch] = useState('');
-  const [cloneCopied, setCloneCopied] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -45,13 +43,29 @@ export default function RepoView() {
     }
   };
 
-  const cloneUrl = `${window.location.origin}/api/git/${repoName}.git`;
+  const isOwner = user && repo && (user.username === repo.owner || user.isAdmin);
+  const canWrite = user && repo && repo.canWrite;
 
+  const tabs = ['Code', 'Commits', 'Branches', 'Issues', ...(canWrite ? ['Push'] : [])];
+
+  // Build the git clone URL — points at the backend git endpoint
+  const cloneUrl = `${window.location.origin}/api/git/${repoName}.git`;
+  const [cloneCopied, setCloneCopied] = useState(false);
   const copyCloneUrl = () => {
-    navigator.clipboard.writeText(`git clone ${cloneUrl}`).then(() => {
+    navigator.clipboard.writeText(cloneUrl).then(() => {
       setCloneCopied(true);
       setTimeout(() => setCloneCopied(false), 2000);
     });
+  };
+
+  const handleDelete = async () => {
+    if (!window.confirm(`Are you sure you want to delete "${repoName}"? This cannot be undone.`)) return;
+    try {
+      await api.deleteRepo(repoName);
+      navigate('/');
+    } catch (e) {
+      alert(`Failed to delete repository: ${e.message}`);
+    }
   };
 
   if (loading) return <div className="loading-page"><span className="spinner" /> Loading…</div>;
@@ -77,10 +91,19 @@ export default function RepoView() {
           <span className={`visibility-badge ${repo.isPublic ? 'public' : 'private'}`}>
             {repo.isPublic ? 'Public' : 'Private'}
           </span>
+          {isOwner && (
+            <button
+              className="btn btn-sm btn-danger"
+              onClick={handleDelete}
+              style={{ marginLeft: 'auto' }}
+            >
+              Delete Repository
+            </button>
+          )}
         </div>
         {repo.description && <div className="repo-view-subtitle">{repo.description}</div>}
 
-        {/* Clone URL row */}
+        {/* Clone / download row */}
         <div className="clone-row">
           <span className="clone-label">Clone</span>
           <code className="clone-url">{cloneUrl}</code>
@@ -92,13 +115,19 @@ export default function RepoView() {
             href={api.getRepoDownloadUrl(repoName, currentBranch)}
             download
           >
-            ↓ Download ZIP
+            ↓ ZIP
           </a>
         </div>
+        {canWrite && (
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
+            Push: <code style={{ fontSize: 11 }}>git push {cloneUrl} {currentBranch}</code>
+            {' — use your GitXO username + password when prompted'}
+          </div>
+        )}
       </div>
 
       <div className="repo-tabs">
-        {TABS.map(t => (
+        {tabs.map(t => (
           <button
             key={t}
             className={`repo-tab ${tab === t ? 'active' : ''}`}
