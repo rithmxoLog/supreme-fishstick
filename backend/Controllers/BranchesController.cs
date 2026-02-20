@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
+using System.Security.Claims;
 using GitXO.Api.Services;
 
 namespace GitXO.Api.Controllers;
@@ -15,6 +16,12 @@ public class BranchesController : ControllerBase
     {
         _logger = logger;
         _repoDb = repoDb;
+    }
+
+    private long? GetUserId()
+    {
+        var idStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        return long.TryParse(idStr, out var id) ? id : null;
     }
 
     [HttpGet("{name}/branches")]
@@ -38,6 +45,11 @@ public class BranchesController : ControllerBase
     {
         var repoPath = await _repoDb.GetRepoPathAsync(name);
         if (repoPath == null) return NotFound(new { error = "Repository not found" });
+
+        var userId = GetUserId();
+        if (userId == null) return Unauthorized();
+        if (!await _repoDb.UserCanWriteAsync(name, userId.Value))
+            return StatusCode(403, new { error = "Write access required" });
 
         if (string.IsNullOrWhiteSpace(body.BranchName) ||
             !System.Text.RegularExpressions.Regex.IsMatch(body.BranchName, @"^[a-zA-Z0-9_\-\/\.]+$"))
@@ -65,6 +77,11 @@ public class BranchesController : ControllerBase
         var repoPath = await _repoDb.GetRepoPathAsync(name);
         if (repoPath == null) return NotFound(new { error = "Repository not found" });
 
+        var userId = GetUserId();
+        if (userId == null) return Unauthorized();
+        if (!await _repoDb.UserCanWriteAsync(name, userId.Value))
+            return StatusCode(403, new { error = "Write access required" });
+
         if (string.IsNullOrWhiteSpace(body.BranchName) ||
             !System.Text.RegularExpressions.Regex.IsMatch(body.BranchName, @"^[a-zA-Z0-9_\-\/\.]+$"))
             return BadRequest(new { error = "Invalid branch name" });
@@ -87,6 +104,11 @@ public class BranchesController : ControllerBase
     {
         var repoPath = await _repoDb.GetRepoPathAsync(name);
         if (repoPath == null) return NotFound(new { error = "Repository not found" });
+
+        var userId = GetUserId();
+        if (userId == null) return Unauthorized();
+        if (!await _repoDb.UserCanWriteAsync(name, userId.Value))
+            return StatusCode(403, new { error = "Write access required" });
 
         var validBranch = new System.Text.RegularExpressions.Regex(@"^[a-zA-Z0-9_\-\/\.]+$");
         if (string.IsNullOrWhiteSpace(body.SourceBranch) || !validBranch.IsMatch(body.SourceBranch))
@@ -119,6 +141,11 @@ public class BranchesController : ControllerBase
     {
         var repoPath = await _repoDb.GetRepoPathAsync(name);
         if (repoPath == null) return NotFound(new { error = "Repository not found" });
+
+        var userId = GetUserId();
+        if (userId == null) return Unauthorized();
+        if (!await _repoDb.UserCanWriteAsync(name, userId.Value))
+            return StatusCode(403, new { error = "Write access required" });
 
         try
         {

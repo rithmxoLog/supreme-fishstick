@@ -242,6 +242,19 @@ public class IssuesController : ControllerBase
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync();
 
+            // Verify caller is the issue author or has write access to the repo
+            await using var authCmd = conn.CreateCommand();
+            authCmd.CommandText = "SELECT author_id FROM issues WHERE repo_id = $1 AND number = $2";
+            authCmd.Parameters.Add(new NpgsqlParameter { Value = repoId.Value });
+            authCmd.Parameters.Add(new NpgsqlParameter { Value = number });
+            var authorId = await authCmd.ExecuteScalarAsync();
+            if (authorId == null) return NotFound(new { error = "Issue not found" });
+
+            var isAuthor = (long)authorId == userId.Value;
+            var canWrite = await _repoDb.UserCanWriteAsync(repoName, userId.Value);
+            if (!isAuthor && !canWrite)
+                return StatusCode(403, new { error = "Only the issue author or a repo collaborator can edit this issue" });
+
             var sets = new List<string>();
             if (body.Status != null) sets.Add("status = $3");
             if (body.Title != null) sets.Add("title = $4");
@@ -283,6 +296,11 @@ public class IssuesController : ControllerBase
 
         var repoId = await _repoDb.GetRepoIdAsync(repoName);
         if (repoId == null) return NotFound(new { error = "Repository not found" });
+
+        // For private repos, only users who can read the repo may comment
+        var meta = await _repoDb.GetRepoMetaAsync(repoName);
+        if (meta != null && !meta.IsPublic && !await _repoDb.UserCanReadAsync(repoName, userId.Value))
+            return StatusCode(403, new { error = "Read access required to comment on issues in this repository" });
 
         try
         {

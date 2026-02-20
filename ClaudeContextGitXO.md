@@ -1,7 +1,7 @@
 # Gitripp — Project Context for Claude
 
 ## Standing Instruction
-**After every Claude message that makes a change, append an entry to the Changelog at the bottom of this file.** Log every file created or modified, every bug fixed, every feature added, every schema change, and any new issues discovered. Each entry should be grouped under the current date and include a short description of what changed and which files were affected.
+**After every Claude message that makes a change, append an entry to the Changelog at the bottom of this file.** Log every file created or modified, every bug fixed, every feature added, every schema change, and any new issues discovered. Each entry should be grouped under the current date and include a short description of what changed and which files were affected. Be sure to document this comprehensively. 
 
 ---
 
@@ -356,3 +356,23 @@ idx_user_settings_user       — user_settings(user_id)
     - If owner missing (full wipe): calls `CreatePlaceholderUserAsync`, then re-inserts the repo row (→ `recovered` + `placeholdersCreated`).
     - If placeholder creation or DB insert fails: adds to `failed` with a reason string.
     - Response shape: `{ recovered, skipped, failed, placeholdersCreated, note? }`. The `note` field is populated when placeholder accounts were created, explaining that those users need a password reset.
+
+---
+
+#### Bug Fixes: Authorization Gaps in BranchesController, FilesController, IssuesController
+
+**Problem:** Several write endpoints lacked per-repo permission checks; any authenticated user could mutate branches or issues they didn't own. Private-repo read access was also gated on write permission instead of read permission.
+
+**Changes:**
+
+- **[backend/Services/RepoDbService.cs]** Added `UserCanReadAsync(repoName, userId)` — same shape as `UserCanWriteAsync` but allows any collaborator role (read/write/admin), not just write/admin. Used by read-gating logic for private repos.
+
+- **[backend/Controllers/FilesController.cs]** Fixed `CanReadRepoAsync`: was calling `UserCanWriteAsync` for private repos, now correctly calls `UserCanReadAsync`. Collaborators with `read` role can now browse files in private repos.
+
+- **[backend/Controllers/BranchesController.cs]**
+  - Added `using System.Security.Claims` import and `GetUserId()` helper.
+  - Added `UserCanWriteAsync` permission check at the top of `CreateBranch`, `Checkout`, `Merge`, and `DeleteBranch`. Returns 403 if the authenticated user does not own or have write/admin collaborator access to the repo.
+
+- **[backend/Controllers/IssuesController.cs]**
+  - `UpdateIssue (PATCH)`: now fetches the issue's `author_id` before updating. Returns 403 unless the caller is the issue author OR passes `UserCanWriteAsync`. Also surfaces a proper 404 if the issue doesn't exist at the auth-check stage.
+  - `AddComment (POST)`: for private repos, calls `UserCanReadAsync` and returns 403 if the user has no read access to the repository.

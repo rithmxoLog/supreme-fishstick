@@ -146,6 +146,27 @@ public class RepoDbService
         catch { return false; }
     }
 
+    public async Task<bool> UserCanReadAsync(string repoName, long userId)
+    {
+        try
+        {
+            await using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"
+                SELECT 1 FROM repositories r
+                LEFT JOIN repo_collaborators rc ON rc.repo_id = r.id AND rc.user_id = $2
+                WHERE r.name = $1
+                  AND (r.owner_id = $2 OR rc.user_id IS NOT NULL)";
+            cmd.Parameters.Add(new NpgsqlParameter { Value = repoName });
+            cmd.Parameters.Add(new NpgsqlParameter { Value = userId });
+            var result = await cmd.ExecuteScalarAsync();
+            return result != null;
+        }
+        catch { return false; }
+    }
+
     public async Task<long?> GetRepoIdAsync(string name)
     {
         try

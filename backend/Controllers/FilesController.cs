@@ -36,7 +36,7 @@ public class FilesController : ControllerBase
         if (meta == null) return true;          // legacy / unregistered = public
         if (meta.IsPublic) return true;
         var userId = GetUserId();
-        return userId != null && await _repoDb.UserCanWriteAsync(name, userId.Value);
+        return userId != null && await _repoDb.UserCanReadAsync(name, userId.Value);
     }
 
     [HttpGet("{name}/files")]
