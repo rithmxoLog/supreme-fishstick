@@ -376,3 +376,45 @@ idx_user_settings_user       — user_settings(user_id)
 - **[backend/Controllers/IssuesController.cs]**
   - `UpdateIssue (PATCH)`: now fetches the issue's `author_id` before updating. Returns 403 unless the caller is the issue author OR passes `UserCanWriteAsync`. Also surfaces a proper 404 if the issue doesn't exist at the auth-check stage.
   - `AddComment (POST)`: for private repos, calls `UserCanReadAsync` and returns 403 if the user has no read access to the repository.
+
+---
+
+#### Bug Fix: CS8126 Tuple Element Name `Rest` Reserved in C#
+
+**Problem:** `GitController.cs` declared a named tuple return type `(string? RepoName, string? Rest)` — `Rest` is a reserved identifier in `ValueTuple` (used internally for tuple chaining beyond 7 elements) and is disallowed as a named member, causing a compile error.
+
+**Changes:**
+
+- **[backend/Controllers/GitController.cs]** Renamed tuple element `Rest` → `Service` in the `ParseGitPath` helper method signature (line 180). No callers referenced `.Rest` by name, so no other changes were needed. Build now succeeds with 0 errors.
+
+---
+
+#### Recovery System Hardening (Meta File Gaps)
+
+**Problem:** Analysis of the recovery system identified five gaps: (1) stale meta files if repo metadata changed post-creation, (2) admin chicken-and-egg — `POST /api/repos/recover` required an admin JWT but a full DB wipe leaves no users to log in as, (3) `CreatePlaceholderUserAsync` could silently return `null` on `ON CONFLICT` (race condition between two concurrent recover calls), (4) `ownerIsAdmin` flag not preserved in the meta file so the admin role could not be restored after a full wipe, (5) no way to update description or default branch via API.
+
+**Changes:**
+
+- **[backend/Services/RepoMetaWriter.cs]**
+  - Added `ownerIsAdmin` parameter to `WriteAsync` (default `false`).
+  - Added `[JsonPropertyName("ownerIsAdmin")] public bool OwnerIsAdmin` field to `RepoMetaFile`. All newly written meta files now record whether the owner was an admin at creation time.
+
+- **[backend/Services/RepoDbService.cs]**
+  - `GetRepoMetaAsync` SQL extended to also `SELECT u.is_admin, r.default_branch`; `RepoMeta` model gains `OwnerIsAdmin` and `DefaultBranch` properties.
+  - `CreatePlaceholderUserAsync`: added `bool isAdmin = false` parameter; `is_admin` is now included in the `INSERT`; added a fallback `SELECT id FROM users WHERE username = $1` after the `ON CONFLICT DO NOTHING` so a race condition no longer returns `null`.
+  - Added `HasAnyUsersAsync()` — returns `true` when at least one row exists in `users`; fails safe to `true` if the DB is unreachable (prevents inadvertent auth bypass).
+  - Added `UpdateRepoAsync(name, description?, defaultBranch?)` — uses `COALESCE` to update only the supplied fields, sets `updated_at = NOW()`.
+
+- **[backend/Controllers/ReposController.cs]**
+  - `CreateRepo`: reads the `is_admin` claim from the JWT and passes it as `ownerIsAdmin` to `RepoMetaWriter.WriteAsync`.
+  - `RecoverFromMetaFiles`:
+    - Removed `[Authorize]`, added `[AllowAnonymous]`. Auth is now checked manually inside the method.
+    - **Bootstrap mode**: if `HasAnyUsersAsync()` returns `false` (full DB wipe), the endpoint is accessible without a JWT so recovery can run before any login is possible. Once at least one user exists, an admin JWT is required as before.
+    - Passes `meta.OwnerIsAdmin` to `CreatePlaceholderUserAsync` so the admin flag is restored for placeholder accounts.
+    - Response now includes `bootstrapMode: bool` field so callers can tell which path was taken.
+  - Added `PATCH /api/repos/{name}` endpoint (`[Authorize]`, owner or admin only):
+    - Accepts `{ description?, defaultBranch? }` body (`UpdateRepoRequest` record).
+    - Calls `UpdateRepoAsync` to write the updated values to the DB.
+    - Re-fetches the row via `GetRepoMetaAsync` and calls `RepoMetaWriter.WriteAsync` with the refreshed values, keeping the meta file permanently in sync with the database.
+    - If `description` is provided, also overwrites `.git/description` to keep git's internal description in sync.
+    - Logs a `REPO_UPDATED` activity event.

@@ -177,7 +177,7 @@ public class GitController : ControllerBase
     /// Parses paths like "myrepo.git/info/refs" or "my.repo.git/git-upload-pack".
     /// Uses LastIndexOf(".git/") so repo names with dots work correctly.
     /// </summary>
-    private static (string? RepoName, string? Rest) ParseGitPath(string path)
+    private static (string? RepoName, string? Service) ParseGitPath(string path)
     {
         var idx = path.LastIndexOf(".git/", StringComparison.OrdinalIgnoreCase);
         if (idx < 0) return (null, null);

@@ -200,11 +200,12 @@ public class ReposController : ControllerBase
 
             // Write a local metadata file alongside the repo directory so ownership
             // can be recovered if the database is ever lost.
-            var savedMeta = await _repoDb.GetRepoMetaAsync(name);
+            var savedMeta   = await _repoDb.GetRepoMetaAsync(name);
+            var ownerIsAdmin = User.FindFirstValue("is_admin") == "true";
             if (savedMeta != null)
                 await RepoMetaWriter.WriteAsync(targetDir, name,
                     savedMeta.OwnerUsername, savedMeta.OwnerEmail, savedMeta.OwnerId,
-                    savedMeta.IsPublic, savedMeta.Description);
+                    savedMeta.IsPublic, savedMeta.Description, ownerIsAdmin: ownerIsAdmin);
 
             _logger.LogEvent("REPO_CREATED", name,
                 new { description = body.Description, isPublic }, userId);
@@ -251,20 +252,68 @@ public class ReposController : ControllerBase
         }
     }
 
-    // POST /api/repos/recover  (admin only)
-    // Scans *.meta.json files in both repo directories and re-inserts any repos
-    // that exist on disk but are missing from the database.
-    //
-    // If the original owner no longer exists in the DB (full wipe scenario), a
-    // placeholder user account is created using the username + email from the
-    // meta file with a random locked password.  The original owner can regain
-    // access by having an admin set a new password for them.
-    [HttpPost("recover")]
+    // PATCH /api/repos/{name}  — update description and/or defaultBranch
+    // Rewrites the .meta.json file so it stays in sync with the database.
+    [HttpPatch("{name}")]
     [Authorize]
+    public async Task<IActionResult> UpdateRepo(string name, [FromBody] UpdateRepoRequest body)
+    {
+        var userId = GetUserId();
+        if (userId == null) return Unauthorized(new { error = "Authentication required" });
+
+        var meta = await _repoDb.GetRepoMetaAsync(name);
+        if (meta == null) return NotFound(new { error = "Repository not found" });
+
+        var isAdminUser = User.FindFirstValue("is_admin") == "true";
+        if (meta.OwnerId != userId && !isAdminUser)
+            return StatusCode(403, new { error = "Only the owner or an admin can update this repository" });
+
+        if (!await _repoDb.UpdateRepoAsync(name, body.Description, body.DefaultBranch))
+            return StatusCode(500, new { error = "Failed to update repository in database" });
+
+        // Refresh meta from DB and rewrite the meta file to prevent it going stale.
+        var updated  = await _repoDb.GetRepoMetaAsync(name);
+        var repoPath = await _repoDb.GetRepoPathAsync(name);
+        if (updated != null && repoPath != null)
+        {
+            var baseDir = Path.GetDirectoryName(repoPath)!;
+            await RepoMetaWriter.WriteAsync(baseDir, name,
+                updated.OwnerUsername, updated.OwnerEmail, updated.OwnerId,
+                updated.IsPublic, updated.Description,
+                defaultBranch: updated.DefaultBranch,
+                ownerIsAdmin: updated.OwnerIsAdmin);
+
+            // Keep .git/description in sync when description changes.
+            if (body.Description != null)
+                await System.IO.File.WriteAllTextAsync(
+                    Path.Combine(repoPath, ".git", "description"), body.Description);
+        }
+
+        _logger.LogEvent("REPO_UPDATED", name, new { body.Description, body.DefaultBranch }, userId);
+        return Ok(new { name, description = updated?.Description, defaultBranch = updated?.DefaultBranch });
+    }
+
+    // POST /api/repos/recover
+    //
+    // Normal mode  (users exist in DB): requires admin JWT.
+    // Bootstrap mode (DB fully wiped, 0 users): allows unauthenticated access so
+    //   recovery can proceed without needing a login first.  Once at least one user
+    //   row is present the endpoint reverts to requiring admin auth automatically.
+    //
+    // Scans *.meta.json files in both repo directories and re-inserts any repos
+    // that exist on disk but are missing from the database.  If the original owner
+    // no longer exists a placeholder user account is created (random locked password);
+    // admin flag is restored from the meta file.
+    [HttpPost("recover")]
+    [AllowAnonymous]
     public async Task<IActionResult> RecoverFromMetaFiles()
     {
-        if (User.FindFirstValue("is_admin") != "true")
-            return StatusCode(403, new { error = "Admin access required" });
+        var hasUsers    = await _repoDb.HasAnyUsersAsync();
+        var isAdmin     = User.FindFirstValue("is_admin") == "true";
+        var bootstrapMode = !hasUsers;
+
+        if (hasUsers && !isAdmin)
+            return StatusCode(403, new { error = "Admin access required. Provide an admin JWT in the Authorization header." });
 
         var publicDir  = _repoDb.GetTargetDir(true);
         var privateDir = _repoDb.GetTargetDir(false);
@@ -290,7 +339,7 @@ public class ReposController : ControllerBase
             // repo can still be re-linked.  Real owner resets password to reclaim.
             if (ownerId == null)
             {
-                ownerId = await _repoDb.CreatePlaceholderUserAsync(meta.OwnerUsername, meta.OwnerEmail);
+                ownerId = await _repoDb.CreatePlaceholderUserAsync(meta.OwnerUsername, meta.OwnerEmail, meta.OwnerIsAdmin);
                 if (ownerId == null)
                 {
                     failed.Add(new
@@ -324,6 +373,7 @@ public class ReposController : ControllerBase
             skipped,
             failed,
             placeholdersCreated,
+            bootstrapMode,
             note = placeholdersCreated.Count > 0
                 ? "Placeholder accounts were created for missing users. These accounts have random locked passwords — owners must have an admin set a new password before they can log in."
                 : null
@@ -362,3 +412,4 @@ public class ReposController : ControllerBase
 }
 
 public record CreateRepoRequest(string Name, string? Description, bool? IsPublic);
+public record UpdateRepoRequest(string? Description, string? DefaultBranch);

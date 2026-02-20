@@ -23,7 +23,8 @@ public static class RepoMetaWriter
         long   ownerId,
         bool   isPublic,
         string? description,
-        string  defaultBranch = "main")
+        string  defaultBranch = "main",
+        bool    ownerIsAdmin  = false)
     {
         var data = new RepoMetaFile
         {
@@ -35,6 +36,7 @@ public static class RepoMetaWriter
             Description   = description,
             DefaultBranch = defaultBranch,
             SavedAt       = DateTimeOffset.UtcNow,
+            OwnerIsAdmin  = ownerIsAdmin,
         };
 
         var filePath = MetaFilePath(reposBaseDir, repoName);
@@ -86,4 +88,5 @@ public class RepoMetaFile
     [JsonPropertyName("description")]   public string? Description   { get; set; }
     [JsonPropertyName("defaultBranch")] public string  DefaultBranch { get; set; } = "main";
     [JsonPropertyName("savedAt")]       public DateTimeOffset SavedAt { get; set; }
+    [JsonPropertyName("ownerIsAdmin")]  public bool           OwnerIsAdmin  { get; set; }
 }
