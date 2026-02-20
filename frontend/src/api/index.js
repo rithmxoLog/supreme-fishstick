@@ -132,6 +132,53 @@ export const api = {
     return request('POST', `/repos/${repo}/upload-zip`, form, true);
   },
 
+  // XHR-based upload with real-time progress callbacks.
+  // onProgress(percent: 0-100) is called during the HTTP upload phase.
+  uploadZipWithProgress: (repo, zipBlob, message, branch, onProgress, authorName, authorEmail) => {
+    return new Promise((resolve, reject) => {
+      const doRequest = (isRetry = false) => {
+        const form = new FormData();
+        form.append('message', message);
+        if (branch) form.append('branch', branch);
+        if (authorName) form.append('authorName', authorName);
+        if (authorEmail) form.append('authorEmail', authorEmail);
+        form.append('file', zipBlob, 'upload.zip');
+
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `${BASE}/repos/${repo}/upload-zip`);
+
+        const token = getToken();
+        if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+
+        if (onProgress) {
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+          };
+        }
+
+        xhr.onload = async () => {
+          if (xhr.status === 401 && !isRetry) {
+            const refreshed = await tryRefresh();
+            if (refreshed) { doRequest(true); return; }
+            reject(new Error('Session expired. Please sign in again.'));
+            return;
+          }
+          try {
+            const data = JSON.parse(xhr.responseText);
+            if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+            else reject(new Error(data.error || `HTTP ${xhr.status}`));
+          } catch {
+            reject(new Error(`HTTP ${xhr.status}`));
+          }
+        };
+
+        xhr.onerror = () => reject(new Error('Network error during upload'));
+        xhr.send(form);
+      };
+      doRequest();
+    });
+  },
+
   // ── Branches ──────────────────────────────────────────────
   listBranches: (repo) => request('GET', `/repos/${repo}/branches`),
   createBranch: (repo, branchName, fromBranch) =>

@@ -125,6 +125,7 @@ first
 
 
 Add a claude context md to note that my current project is the following:
+--At the entire of every claude message, I want this context md to be documented with the appropriate changes that were made per conversation
 --The repos for the users are stored and updated in the back-end folder repositories
 --A basic version of GitHub that is called gitripp, security isn't really a priority at the moment. 
 --has a fully functioning auth-token system to handle login times and logs-out user accounts using standard protocol

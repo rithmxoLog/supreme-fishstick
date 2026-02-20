@@ -212,6 +212,12 @@ public class FilesController : ControllerBase
             foreach (var file in Request.Form.Files)
             {
                 var relativePath = file.FileName;
+
+                // Skip node_modules at any depth
+                if (relativePath.StartsWith("node_modules/", StringComparison.OrdinalIgnoreCase) ||
+                    relativePath.Contains("/node_modules/", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
                 var targetPath = SafeJoin(repoPath, relativePath);
                 var targetDir = System.IO.Path.GetDirectoryName(targetPath)!;
                 if (!Directory.Exists(targetDir)) Directory.CreateDirectory(targetDir);

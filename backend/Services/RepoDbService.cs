@@ -64,7 +64,7 @@ public class RepoDbService
 
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = @"
-                SELECT r.id, r.owner_id, r.is_public, r.description, u.username
+                SELECT r.id, r.owner_id, r.is_public, r.description, u.username, u.email
                 FROM repositories r
                 JOIN users u ON r.owner_id = u.id
                 WHERE r.name = $1";
@@ -75,11 +75,12 @@ public class RepoDbService
 
             return new RepoMeta
             {
-                Id = reader.GetInt64(0),
-                OwnerId = reader.GetInt64(1),
-                IsPublic = reader.GetBoolean(2),
-                Description = reader.IsDBNull(3) ? null : reader.GetString(3),
-                OwnerUsername = reader.GetString(4)
+                Id            = reader.GetInt64(0),
+                OwnerId       = reader.GetInt64(1),
+                IsPublic      = reader.GetBoolean(2),
+                Description   = reader.IsDBNull(3) ? null : reader.GetString(3),
+                OwnerUsername = reader.GetString(4),
+                OwnerEmail    = reader.GetString(5),
             };
         }
         catch { return null; }
@@ -160,13 +161,72 @@ public class RepoDbService
         }
         catch { return null; }
     }
+
+    /// <summary>
+    /// Looks up a user's numeric ID by their username.
+    /// Used during metadata recovery to re-link repos to their owners.
+    /// </summary>
+    public async Task<long?> GetUserIdByUsernameAsync(string username)
+    {
+        try
+        {
+            await using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT id FROM users WHERE username = $1";
+            cmd.Parameters.Add(new NpgsqlParameter { Value = username });
+            var result = await cmd.ExecuteScalarAsync();
+            return result is long id ? id : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Creates a placeholder user account during full recovery (DB + users wiped).
+    /// The account uses a random unguessable password — the real owner must reset it
+    /// via the admin panel or a future password-reset flow.
+    /// Returns the new user's ID, or null on failure.
+    /// </summary>
+    public async Task<long?> CreatePlaceholderUserAsync(string username, string email)
+    {
+        try
+        {
+            // Random 32-byte password encoded as base64 — unguessable and never revealed
+            var randomBytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+            var lockedHash  = BCrypt.Net.BCrypt.HashPassword(Convert.ToBase64String(randomBytes));
+
+            await using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            await using var cmd = conn.CreateCommand();
+            // Use a safe fallback email if the meta file had none
+            var safeEmail = string.IsNullOrWhiteSpace(email)
+                ? $"{username}@recovery.gitxo.local"
+                : email;
+
+            cmd.CommandText = @"
+                INSERT INTO users (username, email, password_hash, created_at, updated_at)
+                VALUES ($1, $2, $3, NOW(), NOW())
+                ON CONFLICT (username) DO NOTHING
+                RETURNING id";
+            cmd.Parameters.Add(new NpgsqlParameter { Value = username });
+            cmd.Parameters.Add(new NpgsqlParameter { Value = safeEmail });
+            cmd.Parameters.Add(new NpgsqlParameter { Value = lockedHash });
+
+            var result = await cmd.ExecuteScalarAsync();
+            return result is long id ? id : null;
+        }
+        catch { return null; }
+    }
 }
 
 public class RepoMeta
 {
-    public long Id { get; set; }
-    public long OwnerId { get; set; }
-    public bool IsPublic { get; set; }
-    public string? Description { get; set; }
-    public string OwnerUsername { get; set; } = "";
+    public long    Id            { get; set; }
+    public long    OwnerId       { get; set; }
+    public bool    IsPublic      { get; set; }
+    public string? Description   { get; set; }
+    public string  OwnerUsername { get; set; } = "";
+    public string  OwnerEmail    { get; set; } = "";
 }

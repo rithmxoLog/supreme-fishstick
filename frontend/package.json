@@ -4,6 +4,7 @@
   "private": true,
   "dependencies": {
     "diff2html": "^3.4.56",
+    "jszip": "^3.10.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.21.1",

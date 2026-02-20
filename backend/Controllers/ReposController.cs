@@ -198,6 +198,14 @@ public class ReposController : ControllerBase
 
             await _repoDb.CreateRepoMetaAsync(name, userId.Value, isPublic, body.Description);
 
+            // Write a local metadata file alongside the repo directory so ownership
+            // can be recovered if the database is ever lost.
+            var savedMeta = await _repoDb.GetRepoMetaAsync(name);
+            if (savedMeta != null)
+                await RepoMetaWriter.WriteAsync(targetDir, name,
+                    savedMeta.OwnerUsername, savedMeta.OwnerEmail, savedMeta.OwnerId,
+                    savedMeta.IsPublic, savedMeta.Description);
+
             _logger.LogEvent("REPO_CREATED", name,
                 new { description = body.Description, isPublic }, userId);
             return StatusCode(201, new { name, description = body.Description, isPublic, message = "Repository created successfully" });
@@ -230,8 +238,10 @@ public class ReposController : ControllerBase
 
         try
         {
+            var reposBaseDir = Path.GetDirectoryName(repoPath)!;
             DeleteDirectory(repoPath);
             await _repoDb.DeleteRepoMetaAsync(name);
+            RepoMetaWriter.Delete(reposBaseDir, name);
             _logger.LogEvent("REPO_DELETED", name, new { }, userId);
             return Ok(new { message = $"Repository '{name}' deleted" });
         }
@@ -239,6 +249,85 @@ public class ReposController : ControllerBase
         {
             return StatusCode(500, new { error = ex.Message });
         }
+    }
+
+    // POST /api/repos/recover  (admin only)
+    // Scans *.meta.json files in both repo directories and re-inserts any repos
+    // that exist on disk but are missing from the database.
+    //
+    // If the original owner no longer exists in the DB (full wipe scenario), a
+    // placeholder user account is created using the username + email from the
+    // meta file with a random locked password.  The original owner can regain
+    // access by having an admin set a new password for them.
+    [HttpPost("recover")]
+    [Authorize]
+    public async Task<IActionResult> RecoverFromMetaFiles()
+    {
+        if (User.FindFirstValue("is_admin") != "true")
+            return StatusCode(403, new { error = "Admin access required" });
+
+        var publicDir  = _repoDb.GetTargetDir(true);
+        var privateDir = _repoDb.GetTargetDir(false);
+
+        var recovered           = new List<object>();
+        var skipped             = new List<string>();
+        var failed              = new List<object>();
+        var placeholdersCreated = new List<string>(); // usernames of newly-created placeholder accounts
+
+        var allMeta = RepoMetaWriter.ScanAll(publicDir)
+            .Concat(RepoMetaWriter.ScanAll(privateDir));
+
+        foreach (var meta in allMeta)
+        {
+            // Skip if already in the database
+            var existing = await _repoDb.GetRepoMetaAsync(meta.Name);
+            if (existing != null) { skipped.Add(meta.Name); continue; }
+
+            // Try to find the owner by username
+            var ownerId = await _repoDb.GetUserIdByUsernameAsync(meta.OwnerUsername);
+
+            // Owner missing from DB — create a locked placeholder account so the
+            // repo can still be re-linked.  Real owner resets password to reclaim.
+            if (ownerId == null)
+            {
+                ownerId = await _repoDb.CreatePlaceholderUserAsync(meta.OwnerUsername, meta.OwnerEmail);
+                if (ownerId == null)
+                {
+                    failed.Add(new
+                    {
+                        repo   = meta.Name,
+                        reason = $"Could not create placeholder user for '{meta.OwnerUsername}'"
+                    });
+                    continue;
+                }
+                placeholdersCreated.Add(meta.OwnerUsername);
+            }
+
+            var ok = await _repoDb.CreateRepoMetaAsync(meta.Name, ownerId.Value, meta.IsPublic, meta.Description);
+            if (ok)
+                recovered.Add(new { repo = meta.Name, owner = meta.OwnerUsername });
+            else
+                failed.Add(new { repo = meta.Name, reason = "Database insert failed" });
+        }
+
+        _logger.LogEvent("REPOS_RECOVERED", null, new
+        {
+            recovered           = recovered.Count,
+            skipped             = skipped.Count,
+            failed              = failed.Count,
+            placeholdersCreated = placeholdersCreated.Count
+        }, GetUserId());
+
+        return Ok(new
+        {
+            recovered,
+            skipped,
+            failed,
+            placeholdersCreated,
+            note = placeholdersCreated.Count > 0
+                ? "Placeholder accounts were created for missing users. These accounts have random locked passwords — owners must have an admin set a new password before they can log in."
+                : null
+        });
     }
 
     private static void DeleteDirectory(string path)

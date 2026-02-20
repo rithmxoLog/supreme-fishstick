@@ -1,394 +1,398 @@
 import React, { useState, useRef } from 'react';
+import JSZip from 'jszip';
 import { api } from '../api';
 
-const TABS = ['Files', 'Folder', 'ZIP'];
+// ── Tree helpers ───────────────────────────────────────────────────────────────
 
-export default function PushPanel({ repoName, currentBranch, branches, onRefresh }) {
-  const [tab, setTab] = useState('Files');
+function buildTree(files) {
+  const root = { name: '', fullPath: '', type: 'dir', children: [] };
 
-  // ── Shared ────────────────────────────────────────────────────────────────
-  const [commitMsg, setCommitMsg]     = useState('');
-  const [branch, setBranch]           = useState(currentBranch);
-  const [pushing, setPushing]         = useState(false);
-  const [error, setError]             = useState('');
-  const [success, setSuccess]         = useState('');
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [authorName, setAuthorName]   = useState('');
-  const [authorEmail, setAuthorEmail] = useState('');
+  for (const entry of files) {
+    const parts = entry.targetPath.split('/').filter(Boolean);
+    let node = root;
+    let currentPath = '';
 
-  // ── Files tab ─────────────────────────────────────────────────────────────
-  const [files, setFiles]           = useState([]);
-  const [targetDir, setTargetDir]   = useState('');
-  const [dragOver, setDragOver]     = useState(false);
-  const fileInputRef                = useRef();
-
-  // ── Folder tab ────────────────────────────────────────────────────────────
-  const [folderFiles, setFolderFiles]       = useState([]);
-  const [stripTopFolder, setStripTopFolder] = useState(true);
-  const folderInputRef                      = useRef();
-
-  // ── ZIP tab ───────────────────────────────────────────────────────────────
-  const [zipFile, setZipFile]   = useState(null);
-  const zipInputRef             = useRef();
-
-  // ── Helpers ───────────────────────────────────────────────────────────────
-  const reset = () => {
-    setError(''); setSuccess('');
-    setFiles([]); setFolderFiles([]); setZipFile(null);
-    setCommitMsg('');
-  };
-
-  const formatSize = (bytes) => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  };
-
-  // ── Files tab helpers ─────────────────────────────────────────────────────
-  function buildTargetPath(dir, fileName) {
-    const cleanDir = dir.replace(/^\//, '').replace(/\/*$/, '');
-    return cleanDir ? `${cleanDir}/${fileName}` : fileName;
-  }
-
-  function addFiles(newFiles) {
-    setFiles(prev => {
-      const map = new Map(prev.map(f => [f.targetPath, f]));
-      for (const file of newFiles) {
-        const tp = buildTargetPath(targetDir, file.name);
-        map.set(tp, { file, targetPath: tp });
+    for (let i = 0; i < parts.length - 1; i++) {
+      currentPath = currentPath ? `${currentPath}/${parts[i]}` : parts[i];
+      let child = node.children.find(c => c.type === 'dir' && c.name === parts[i]);
+      if (!child) {
+        child = { name: parts[i], fullPath: currentPath, type: 'dir', children: [] };
+        node.children.push(child);
       }
-      return Array.from(map.values());
+      node = child;
+    }
+
+    node.children.push({
+      name: parts[parts.length - 1],
+      fullPath: entry.targetPath,
+      type: 'file',
+      fileEntry: entry,
     });
   }
 
-  function updateTargetPath(oldPath, newPath) {
-    setFiles(prev => prev.map(f => f.targetPath === oldPath ? { ...f, targetPath: newPath } : f));
-  }
-
-  function removeFile(targetPath) {
-    setFiles(prev => prev.filter(f => f.targetPath !== targetPath));
-  }
-
-  function handleTargetDirChange(newDir) {
-    setTargetDir(newDir);
-    setFiles(prev => prev.map(f => ({ ...f, targetPath: buildTargetPath(newDir, f.file.name) })));
-  }
-
-  // ── Folder tab helpers ────────────────────────────────────────────────────
-  function addFolderFiles(newFiles) {
-    const result = [];
-    for (const file of newFiles) {
-      const rel = file.webkitRelativePath || file.name;
-      // Strip the top-level folder segment (e.g. "myproject/src/index.js" → "src/index.js")
-      const parts = rel.split('/');
-      const path  = stripTopFolder && parts.length > 1 ? parts.slice(1).join('/') : rel;
-      if (path) result.push({ file, originalPath: rel, targetPath: path });
-    }
-    setFolderFiles(result);
-  }
-
-  function updateFolderPath(originalPath, newPath) {
-    setFolderFiles(prev => prev.map(f =>
-      f.originalPath === originalPath ? { ...f, targetPath: newPath } : f
-    ));
-  }
-
-  function removeFolderFile(originalPath) {
-    setFolderFiles(prev => prev.filter(f => f.originalPath !== originalPath));
-  }
-
-  // ── Push handlers ─────────────────────────────────────────────────────────
-  const handlePushFiles = async () => {
-    setError(''); setSuccess('');
-    if (files.length === 0)    { setError('Select at least one file'); return; }
-    if (!commitMsg.trim())     { setError('Commit message is required'); return; }
-    setPushing(true);
-    try {
-      const result = await api.pushFiles(
-        repoName, files, commitMsg.trim(), branch,
-        authorName.trim() || undefined, authorEmail.trim() || undefined
-      );
-      setSuccess(`Pushed ${result.files.length} file(s) — commit ${result.commit.hash}: ${result.commit.message}`);
-      setFiles([]); setCommitMsg('');
-      onRefresh();
-    } catch (e) { setError(e.message); }
-    finally { setPushing(false); }
+  const sort = (n) => {
+    n.children.sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    n.children.forEach(c => c.type === 'dir' && sort(c));
   };
+  sort(root);
+  return root;
+}
 
-  const handlePushFolder = async () => {
-    setError(''); setSuccess('');
-    if (folderFiles.length === 0) { setError('Select a folder first'); return; }
-    if (!commitMsg.trim())        { setError('Commit message is required'); return; }
-    setPushing(true);
-    try {
-      const mapped = folderFiles.map(f => ({ file: f.file, targetPath: f.targetPath }));
-      const result = await api.pushFiles(
-        repoName, mapped, commitMsg.trim(), branch,
-        authorName.trim() || undefined, authorEmail.trim() || undefined
-      );
-      setSuccess(`Pushed ${result.files.length} file(s) — commit ${result.commit.hash}: ${result.commit.message}`);
-      setFolderFiles([]); setCommitMsg('');
-      onRefresh();
-    } catch (e) { setError(e.message); }
-    finally { setPushing(false); }
-  };
+function countFiles(node) {
+  if (node.type === 'file') return 1;
+  return node.children.reduce((acc, c) => acc + countFiles(c), 0);
+}
 
-  const handlePushZip = async () => {
-    setError(''); setSuccess('');
-    if (!zipFile)          { setError('Select a .zip file first'); return; }
-    if (!commitMsg.trim()) { setError('Commit message is required'); return; }
-    setPushing(true);
-    try {
-      const result = await api.uploadZip(repoName, zipFile, commitMsg.trim(), branch);
-      const stripped = result.strippedPrefix ? ` (stripped top folder "${result.strippedPrefix}")` : '';
-      setSuccess(`Extracted ${result.files.length} file(s)${stripped} — commit ${result.commit.hash}: ${result.commit.message}`);
-      setZipFile(null); setCommitMsg('');
-      onRefresh();
-    } catch (e) { setError(e.message); }
-    finally { setPushing(false); }
-  };
+function TreeNode({ node, depth, expanded, onToggle, onRemove, formatSize }) {
+  const indent = { paddingLeft: 8 + depth * 16 };
 
-  // ── Tab switching (clear state) ───────────────────────────────────────────
-  const switchTab = (t) => { setTab(t); setError(''); setSuccess(''); };
-
-  // ── Shared footer (branch, commit msg, advanced, submit) ──────────────────
-  const sharedFooter = (onSubmit, disabled, label) => (
-    <>
-      <div className="form-group mt-16">
-        <label className="form-label">Target branch</label>
-        <select className="form-select" value={branch} onChange={e => setBranch(e.target.value)}>
-          {branches.map(b => <option key={b} value={b}>{b}</option>)}
-        </select>
+  if (node.type === 'file') {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 8px', ...indent }}>
+        <span style={{ fontSize: 11, flexShrink: 0 }}>📄</span>
+        <span style={{ flex: 1, fontSize: 12 }}>{node.name}</span>
+        <span style={{ fontSize: 11, color: 'var(--text-secondary)', flexShrink: 0 }}>
+          {formatSize(node.fileEntry.file.size)}
+        </span>
+        <span
+          style={{ cursor: 'pointer', color: 'var(--danger)', fontSize: 15, flexShrink: 0, paddingLeft: 4, lineHeight: 1 }}
+          onClick={() => onRemove(node.fullPath)}
+        >×</span>
       </div>
+    );
+  }
 
-      <div className="form-group">
-        <label className="form-label">Commit message *</label>
-        <input
-          className="form-input"
-          value={commitMsg}
-          onChange={e => setCommitMsg(e.target.value)}
-          placeholder="Add files via GitXO push"
-        />
-      </div>
-
-      <div style={{ marginBottom: 16 }}>
-        <button
-          className="btn btn-sm"
-          style={{ fontSize: 12, padding: '3px 10px' }}
-          onClick={() => setShowAdvanced(v => !v)}
-        >
-          {showAdvanced ? '▾ Hide' : '▸ Show'} advanced options
-        </button>
-        {showAdvanced && (
-          <div style={{ marginTop: 10, display: 'flex', gap: 12 }}>
-            <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
-              <label className="form-label">Author name</label>
-              <input className="form-input" value={authorName} onChange={e => setAuthorName(e.target.value)} placeholder="GitXO User" />
-            </div>
-            <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
-              <label className="form-label">Author email</label>
-              <input className="form-input" value={authorEmail} onChange={e => setAuthorEmail(e.target.value)} placeholder="gitxo@local" />
-            </div>
-          </div>
-        )}
-      </div>
-
-      <button className="btn btn-primary" onClick={onSubmit} disabled={pushing || disabled}>
-        {pushing ? <><span className="spinner" /> Pushing…</> : label}
-      </button>
-    </>
-  );
+  const isExpanded = expanded.has(node.fullPath);
+  const fc = countFiles(node);
 
   return (
     <div>
+      <div
+        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 8px', cursor: 'pointer', ...indent }}
+        onClick={() => onToggle(node.fullPath)}
+      >
+        <span style={{ fontSize: 10, color: 'var(--text-secondary)', width: 10, flexShrink: 0 }}>
+          {isExpanded ? '▾' : '▸'}
+        </span>
+        <span style={{ fontSize: 11, flexShrink: 0 }}>📁</span>
+        <span style={{ fontSize: 12, fontWeight: 500, flex: 1 }}>{node.name}</span>
+        <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+          {fc} file{fc !== 1 ? 's' : ''}
+        </span>
+      </div>
+      {isExpanded && node.children.map(child => (
+        <TreeNode
+          key={child.fullPath}
+          node={child}
+          depth={depth + 1}
+          expanded={expanded}
+          onToggle={onToggle}
+          onRemove={onRemove}
+          formatSize={formatSize}
+        />
+      ))}
+    </div>
+  );
+}
+
+// ── Main component ─────────────────────────────────────────────────────────────
+
+export default function PushPanel({ repoName, currentBranch, branches, onRefresh }) {
+  const [stagedFiles, setStagedFiles]       = useState([]);
+  const [directZip, setDirectZip]           = useState(null);
+  const [commitMsg, setCommitMsg]           = useState('');
+  const [branch, setBranch]                 = useState(currentBranch);
+  const [authorName, setAuthorName]         = useState('');
+  const [authorEmail, setAuthorEmail]       = useState('');
+  const [showAdvanced, setShowAdvanced]     = useState(false);
+  const [dragOver, setDragOver]             = useState(false);
+  const [pushing, setPushing]               = useState(false);
+  const [progress, setProgress]             = useState(null); // { label, percent }
+  const [error, setError]                   = useState('');
+  const [success, setSuccess]               = useState('');
+  const [expandedDirs, setExpandedDirs]     = useState(new Set());
+
+  const fileInputRef   = useRef();
+  const folderInputRef = useRef();
+  const zipInputRef    = useRef();
+
+  const formatSize = (bytes) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1048576).toFixed(1)} MB`;
+  };
+
+  const totalSize = stagedFiles.reduce((s, f) => s + f.file.size, 0);
+
+  // ── File ingestion ─────────────────────────────────────────────────────────
+
+  const ingestFiles = (rawFiles, stripTopLevel = false) => {
+    const entries = [];
+    for (const file of rawFiles) {
+      const rel = file.webkitRelativePath || file.name;
+      const parts = rel.split('/').filter(Boolean);
+      if (parts.some(p => p.toLowerCase() === 'node_modules')) continue;
+      const targetPath = stripTopLevel && parts.length > 1 ? parts.slice(1).join('/') : rel;
+      if (targetPath) entries.push({ file, targetPath });
+    }
+    setStagedFiles(prev => {
+      const map = new Map(prev.map(f => [f.targetPath, f]));
+      for (const e of entries) map.set(e.targetPath, e);
+      return Array.from(map.values());
+    });
+    setDirectZip(null);
+    setError('');
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    setError('');
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 1 && files[0].name.toLowerCase().endsWith('.zip')) {
+      setStagedFiles([]);
+      setDirectZip(files[0]);
+      return;
+    }
+    ingestFiles(files, false);
+  };
+
+  const handleFileInput   = (e) => { ingestFiles(Array.from(e.target.files), false); e.target.value = ''; };
+  const handleFolderInput = (e) => { ingestFiles(Array.from(e.target.files), true);  e.target.value = ''; };
+  const handleZipInput    = (e) => {
+    const f = e.target.files[0];
+    if (f) { setStagedFiles([]); setDirectZip(f); }
+    e.target.value = '';
+  };
+
+  const removeFile = (targetPath) =>
+    setStagedFiles(prev => prev.filter(f => f.targetPath !== targetPath));
+
+  const toggleDir = (fullPath) =>
+    setExpandedDirs(prev => {
+      const next = new Set(prev);
+      if (next.has(fullPath)) next.delete(fullPath); else next.add(fullPath);
+      return next;
+    });
+
+  // ── Push ──────────────────────────────────────────────────────────────────
+
+  const handlePush = async () => {
+    if (!directZip && stagedFiles.length === 0) { setError('Add at least one file'); return; }
+    if (!commitMsg.trim()) { setError('Commit message is required'); return; }
+
+    setError(''); setSuccess('');
+    setPushing(true);
+    setProgress({ label: 'Preparing…', percent: 0 });
+
+    try {
+      let zipBlob;
+
+      if (directZip) {
+        zipBlob = directZip;
+        setProgress({ label: 'Uploading…', percent: 0 });
+      } else {
+        // Phase 1: client-side compression
+        setProgress({ label: 'Compressing…', percent: 0 });
+        const zip = new JSZip();
+        for (const { file, targetPath } of stagedFiles) zip.file(targetPath, file);
+        zipBlob = await zip.generateAsync(
+          { type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } },
+          (meta) => setProgress({ label: 'Compressing…', percent: Math.round(meta.percent * 0.5) })
+        );
+        setProgress({ label: 'Uploading…', percent: 50 });
+      }
+
+      // Phase 2: upload with XHR progress
+      const uploadOffset = directZip ? 0 : 50;
+      const uploadScale  = directZip ? 100 : 50;
+
+      const result = await api.uploadZipWithProgress(
+        repoName, zipBlob, commitMsg.trim(), branch,
+        (pct) => setProgress({ label: 'Uploading…', percent: uploadOffset + Math.round(pct * uploadScale / 100) }),
+        authorName.trim() || undefined,
+        authorEmail.trim() || undefined,
+      );
+
+      const stripped = result.strippedPrefix ? ` (stripped "${result.strippedPrefix}")` : '';
+      setSuccess(`Pushed ${result.files.length} file(s)${stripped} — commit ${result.commit.hash}: ${result.commit.message}`);
+      setStagedFiles([]);
+      setDirectZip(null);
+      setCommitMsg('');
+      onRefresh();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setPushing(false);
+      setProgress(null);
+    }
+  };
+
+  const tree    = buildTree(stagedFiles);
+  const hasSomething = directZip || stagedFiles.length > 0;
+  const canPush = hasSomething && commitMsg.trim() && !pushing;
+
+  return (
+    <div>
+      {/* Always-present hidden file inputs */}
+      <input ref={fileInputRef}   type="file" multiple              style={{ display: 'none' }} onChange={handleFileInput}   />
+      <input ref={folderInputRef} type="file" webkitdirectory="true" multiple style={{ display: 'none' }} onChange={handleFolderInput} />
+      <input ref={zipInputRef}    type="file" accept=".zip"          style={{ display: 'none' }} onChange={handleZipInput}    />
+
       <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>Push to repository</h2>
       <p style={{ color: 'var(--text-secondary)', fontSize: 14, marginBottom: 16 }}>
-        Upload files, a folder, or a ZIP archive — they'll be committed directly to the repo.
+        Drag &amp; drop files, a folder, or a .zip — they'll be committed directly to the repo.
+        Folders are compressed in-browser before upload for speed.
       </p>
-
-      {/* Tabs */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 0 }}>
-        {TABS.map(t => (
-          <button
-            key={t}
-            onClick={() => switchTab(t)}
-            style={{
-              background: 'none', border: 'none', cursor: 'pointer',
-              padding: '6px 16px', fontSize: 13, fontWeight: 500,
-              color: tab === t ? 'var(--accent)' : 'var(--text-secondary)',
-              borderBottom: tab === t ? '2px solid var(--accent)' : '2px solid transparent',
-              marginBottom: -1,
-            }}
-          >
-            {t === 'Files' ? '📄 Files' : t === 'Folder' ? '📁 Folder' : '🗜 ZIP'}
-          </button>
-        ))}
-      </div>
 
       {error   && <div className="error-banner">{error}</div>}
       {success && <div className="success-banner">{success}</div>}
 
-      {/* ── Files tab ─────────────────────────────────────────────────────── */}
-      {tab === 'Files' && (
+      {/* ── Drop zone (shown only when nothing staged) ── */}
+      {!hasSomething && (
+        <div
+          className={`dropzone ${dragOver ? 'active' : ''}`}
+          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={handleDrop}
+        >
+          <div style={{ fontSize: 40, marginBottom: 8 }}>📂</div>
+          <div className="dropzone-text">Drop files, a folder, or a .zip here</div>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6, marginBottom: 14 }}>— or —</div>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+            <button className="btn btn-sm" onClick={() => fileInputRef.current.click()}>📄 Select Files</button>
+            <button className="btn btn-sm" onClick={() => folderInputRef.current.click()}>📁 Select Folder</button>
+            <button className="btn btn-sm" onClick={() => zipInputRef.current.click()}>🗜 Select ZIP</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Direct ZIP display ── */}
+      {directZip && (
+        <div style={{
+          background: 'var(--bg-overlay)', border: '1px solid var(--border)',
+          borderRadius: 'var(--radius)', padding: '12px 16px', marginBottom: 16,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 28 }}>🗜</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 500 }}>{directZip.name}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                {formatSize(directZip.size)} · will be extracted server-side
+              </div>
+            </div>
+            <button className="btn btn-sm" onClick={() => setDirectZip(null)}>× Remove</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Staged files tree ── */}
+      {stagedFiles.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <span style={{ fontSize: 13, fontWeight: 500 }}>
+              {stagedFiles.length} file{stagedFiles.length !== 1 ? 's' : ''} staged
+              <span style={{ fontWeight: 400, color: 'var(--text-secondary)', marginLeft: 8 }}>
+                ({formatSize(totalSize)} total)
+              </span>
+            </span>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button className="btn btn-sm" style={{ fontSize: 11 }} onClick={() => fileInputRef.current.click()}>+ Files</button>
+              <button className="btn btn-sm" style={{ fontSize: 11 }} onClick={() => folderInputRef.current.click()}>+ Folder</button>
+              <button className="btn btn-sm btn-danger" style={{ fontSize: 11 }} onClick={() => setStagedFiles([])}>Clear all</button>
+            </div>
+          </div>
+
+          <div style={{
+            background: 'var(--bg-overlay)', border: '1px solid var(--border)',
+            borderRadius: 'var(--radius)', padding: '6px 0',
+            maxHeight: 320, overflowY: 'auto',
+          }}>
+            {tree.children.map(child => (
+              <TreeNode
+                key={child.fullPath}
+                node={child}
+                depth={0}
+                expanded={expandedDirs}
+                onToggle={toggleDir}
+                onRemove={removeFile}
+                formatSize={formatSize}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Commit form (shown once something is staged) ── */}
+      {hasSomething && (
         <>
           <div className="form-group">
-            <label className="form-label">Target directory</label>
+            <label className="form-label">Target branch</label>
+            <select className="form-select" value={branch} onChange={e => setBranch(e.target.value)}>
+              {branches.map(b => <option key={b} value={b}>{b}</option>)}
+            </select>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Commit message *</label>
             <input
               className="form-input"
-              value={targetDir}
-              onChange={e => handleTargetDirChange(e.target.value)}
-              placeholder="/ (repo root) — e.g. src/components/"
+              value={commitMsg}
+              onChange={e => setCommitMsg(e.target.value)}
+              placeholder="Add files via GitXO push"
             />
-            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
-              All uploaded files go here. Override per-file below.
-            </div>
           </div>
 
-          <div
-            className={`dropzone ${dragOver ? 'active' : ''}`}
-            onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={e => { e.preventDefault(); setDragOver(false); addFiles(Array.from(e.dataTransfer.files)); }}
-            onClick={() => fileInputRef.current.click()}
-          >
-            <div style={{ fontSize: 32, marginBottom: 8 }}>📄</div>
-            <div className="dropzone-text">Drag & drop files here, or click to select</div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>Max 50 MB per file</div>
-            <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }}
-              onChange={e => addFiles(Array.from(e.target.files))} />
-          </div>
-
-          {files.length > 0 && (
-            <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 2 }}>
-                {files.length} file(s) — edit paths to control destination:
+          <div style={{ marginBottom: 16 }}>
+            <button
+              className="btn btn-sm"
+              style={{ fontSize: 12, padding: '3px 10px' }}
+              onClick={() => setShowAdvanced(v => !v)}
+            >
+              {showAdvanced ? '▾ Hide' : '▸ Show'} advanced options
+            </button>
+            {showAdvanced && (
+              <div style={{ marginTop: 10, display: 'flex', gap: 12 }}>
+                <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
+                  <label className="form-label">Author name</label>
+                  <input className="form-input" value={authorName} onChange={e => setAuthorName(e.target.value)} placeholder="GitXO User" />
+                </div>
+                <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
+                  <label className="form-label">Author email</label>
+                  <input className="form-input" value={authorEmail} onChange={e => setAuthorEmail(e.target.value)} placeholder="gitxo@local" />
+                </div>
               </div>
-              {files.map(f => (
-                <div key={f.targetPath} style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg-overlay)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '6px 10px' }}>
-                  <span style={{ fontSize: 13, flexShrink: 0 }}>📄</span>
-                  <input className="form-input" style={{ flex: 1, fontSize: 12, padding: '3px 8px' }}
-                    value={f.targetPath} onChange={e => updateTargetPath(f.targetPath, e.target.value)} />
-                  <span style={{ fontSize: 11, color: 'var(--text-secondary)', flexShrink: 0 }}>{formatSize(f.file.size)}</span>
-                  <span style={{ cursor: 'pointer', color: 'var(--danger)', fontSize: 16, flexShrink: 0, lineHeight: 1 }}
-                    onClick={() => removeFile(f.targetPath)}>×</span>
-                </div>
-              ))}
+            )}
+          </div>
+
+          {/* Progress bar */}
+          {progress && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                <span style={{ color: 'var(--text-secondary)' }}>{progress.label}</span>
+                <span style={{ color: 'var(--text-secondary)' }}>{progress.percent}%</span>
+              </div>
+              <div style={{ background: 'var(--border)', borderRadius: 4, height: 6, overflow: 'hidden' }}>
+                <div style={{
+                  background: 'var(--accent)', height: '100%',
+                  width: `${progress.percent}%`,
+                  transition: 'width 0.1s ease', borderRadius: 4,
+                }} />
+              </div>
             </div>
           )}
 
-          {sharedFooter(handlePushFiles, files.length === 0 || !commitMsg.trim(),
-            `Push ${files.length > 0 ? files.length + ' file(s)' : 'files'}`)}
-        </>
-      )}
-
-      {/* ── Folder tab ────────────────────────────────────────────────────── */}
-      {tab === 'Folder' && (
-        <>
-          <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>
-            Select a folder from your computer. All files inside will be uploaded with their paths preserved.
-          </p>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-            <button className="btn btn-primary" onClick={() => folderInputRef.current.click()}>
-              📁 Select Folder
-            </button>
-            {folderFiles.length > 0 && (
-              <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                {folderFiles.length} file(s) from <strong>{folderFiles[0].originalPath.split('/')[0]}/</strong>
-              </span>
-            )}
-            <input
-              ref={folderInputRef}
-              type="file"
-              webkitdirectory="true"
-              directory="true"
-              multiple
-              style={{ display: 'none' }}
-              onChange={e => addFolderFiles(Array.from(e.target.files))}
-            />
-          </div>
-
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 16, cursor: 'pointer' }}>
-            <input type="checkbox" checked={stripTopFolder} onChange={e => {
-              setStripTopFolder(e.target.checked);
-              // Re-process existing files with new strip setting
-              if (folderFiles.length > 0) {
-                setFolderFiles(prev => prev.map(f => {
-                  const parts = f.originalPath.split('/');
-                  const path  = e.target.checked && parts.length > 1 ? parts.slice(1).join('/') : f.originalPath;
-                  return { ...f, targetPath: path };
-                }));
-              }
-            }} />
-            Strip top-level folder name
-            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-              (e.g. <code>myproject/src/index.js</code> → <code>src/index.js</code>)
-            </span>
-          </label>
-
-          {folderFiles.length > 0 && (
-            <div style={{ maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
-              {folderFiles.map(f => (
-                <div key={f.originalPath} style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg-overlay)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '5px 10px' }}>
-                  <span style={{ fontSize: 12, flexShrink: 0 }}>📄</span>
-                  <input className="form-input" style={{ flex: 1, fontSize: 12, padding: '3px 8px' }}
-                    value={f.targetPath} onChange={e => updateFolderPath(f.originalPath, e.target.value)} />
-                  <span style={{ fontSize: 11, color: 'var(--text-secondary)', flexShrink: 0 }}>{formatSize(f.file.size)}</span>
-                  <span style={{ cursor: 'pointer', color: 'var(--danger)', fontSize: 16, flexShrink: 0, lineHeight: 1 }}
-                    onClick={() => removeFolderFile(f.originalPath)}>×</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {sharedFooter(handlePushFolder, folderFiles.length === 0 || !commitMsg.trim(),
-            `Push ${folderFiles.length > 0 ? folderFiles.length + ' file(s)' : 'folder'}`)}
-        </>
-      )}
-
-      {/* ── ZIP tab ───────────────────────────────────────────────────────── */}
-      {tab === 'ZIP' && (
-        <>
-          <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>
-            Upload a <code>.zip</code> archive. The backend will extract it, preserve the folder structure,
-            and commit everything in one go. If all files share a single top-level folder it will be stripped automatically.
-          </p>
-
-          <div
-            className={`dropzone ${zipFile ? 'active' : ''}`}
-            onClick={() => zipInputRef.current.click()}
-            onDragOver={e => { e.preventDefault(); }}
-            onDrop={e => {
-              e.preventDefault();
-              const f = e.dataTransfer.files[0];
-              if (f && f.name.endsWith('.zip')) setZipFile(f);
-              else setError('Only .zip files are accepted');
-            }}
-          >
-            <div style={{ fontSize: 32, marginBottom: 8 }}>🗜</div>
-            {zipFile ? (
-              <>
-                <div className="dropzone-text" style={{ color: 'var(--accent)' }}>{zipFile.name}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>{formatSize(zipFile.size)}</div>
-              </>
-            ) : (
-              <>
-                <div className="dropzone-text">Drag & drop a .zip here, or click to select</div>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>Max 200 MB</div>
-              </>
-            )}
-            <input ref={zipInputRef} type="file" accept=".zip" style={{ display: 'none' }}
-              onChange={e => { if (e.target.files[0]) setZipFile(e.target.files[0]); }} />
-          </div>
-
-          {zipFile && (
-            <button className="btn btn-sm" style={{ marginTop: 8, fontSize: 12 }} onClick={() => setZipFile(null)}>
-              × Remove
-            </button>
-          )}
-
-          {sharedFooter(handlePushZip, !zipFile || !commitMsg.trim(),
-            zipFile ? `Extract & push "${zipFile.name}"` : 'Extract & push')}
+          <button className="btn btn-primary" onClick={handlePush} disabled={!canPush}>
+            {pushing
+              ? <><span className="spinner" /> {progress?.label ?? 'Working…'}</>
+              : directZip
+                ? `Extract & push "${directZip.name}"`
+                : `Push ${stagedFiles.length} file${stagedFiles.length !== 1 ? 's' : ''}`
+            }
+          </button>
         </>
       )}
     </div>

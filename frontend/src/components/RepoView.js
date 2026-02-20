@@ -145,6 +145,7 @@ export default function RepoView() {
           branches={repo.branches || []}
           onCheckout={handleCheckout}
           onRefresh={load}
+          canWrite={canWrite}
         />
       )}
       {tab === 'Commits' && (

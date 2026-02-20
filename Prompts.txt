@@ -1,0 +1,2 @@
+Context UPDATE:
+Take everything in this conversation and update the changelog in ClaudeContext.md comphrehensively to reflect features and alterations that were made.

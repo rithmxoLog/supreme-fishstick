@@ -2,12 +2,20 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api';
 import FileViewer from './FileViewer';
 
-export default function FileBrowser({ repoName, currentBranch, branches, onCheckout, onRefresh }) {
-  const [path, setPath] = useState('');
-  const [files, setFiles] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+export default function FileBrowser({ repoName, currentBranch, branches, onCheckout, onRefresh, canWrite }) {
+  const [path, setPath]               = useState('');
+  const [files, setFiles]             = useState([]);
+  const [loading, setLoading]         = useState(true);
+  const [error, setError]             = useState('');
   const [selectedFile, setSelectedFile] = useState(null);
+
+  // ── New-file inline editor ────────────────────────────────────────────────
+  const [creatingFile, setCreatingFile]     = useState(false);
+  const [newFileName, setNewFileName]       = useState('');
+  const [newFileContent, setNewFileContent] = useState('');
+  const [newFileCommitMsg, setNewFileCommitMsg] = useState('');
+  const [creating, setCreating]             = useState(false);
+  const [createError, setCreateError]       = useState('');
 
   const loadFiles = async (p = '') => {
     setLoading(true);
@@ -27,30 +35,123 @@ export default function FileBrowser({ repoName, currentBranch, branches, onCheck
   useEffect(() => { loadFiles(''); }, [repoName, currentBranch]);
 
   const navigateTo = (filePath, type) => {
-    if (type === 'directory') {
-      loadFiles(filePath);
-    } else {
-      setSelectedFile(filePath);
+    if (type === 'directory') loadFiles(filePath);
+    else setSelectedFile(filePath);
+  };
+
+  const breadcrumbs = () => path.split('/').filter(Boolean);
+
+  // ── New file handler ──────────────────────────────────────────────────────
+  const openNewFile = () => {
+    setNewFileName('');
+    setNewFileContent('');
+    setNewFileCommitMsg('');
+    setCreateError('');
+    setCreatingFile(true);
+  };
+
+  const cancelNewFile = () => setCreatingFile(false);
+
+  const handleCreateFile = async () => {
+    const trimmedName = newFileName.trim();
+    if (!trimmedName) { setCreateError('File name is required'); return; }
+    if (!newFileCommitMsg.trim()) { setCreateError('Commit message is required'); return; }
+
+    const filePath = path ? `${path}/${trimmedName}` : trimmedName;
+    setCreating(true);
+    setCreateError('');
+    try {
+      await api.saveFile(repoName, filePath, newFileContent, newFileCommitMsg.trim(), currentBranch);
+      setCreatingFile(false);
+      loadFiles(path);
+      onRefresh();
+    } catch (e) {
+      setCreateError(e.message);
+    } finally {
+      setCreating(false);
     }
   };
 
-  const breadcrumbs = () => {
-    if (!path) return [];
-    return path.split('/').filter(Boolean);
-  };
-
+  // ── File viewer ───────────────────────────────────────────────────────────
   if (selectedFile) {
     return (
       <FileViewer
         repoName={repoName}
         filePath={selectedFile}
         currentBranch={currentBranch}
-        onBack={() => { setSelectedFile(null); }}
+        onBack={() => setSelectedFile(null)}
         onRefresh={() => { loadFiles(path); onRefresh(); }}
       />
     );
   }
 
+  // ── New-file editor panel ──────────────────────────────────────────────────
+  if (creatingFile) {
+    const prefix = path ? `${path}/` : '';
+    return (
+      <div>
+        {/* Breadcrumb */}
+        <div className="breadcrumb">
+          <a onClick={() => { setCreatingFile(false); loadFiles(''); }}>{repoName}</a>
+          {breadcrumbs().map((crumb, i) => {
+            const crumbPath = breadcrumbs().slice(0, i + 1).join('/');
+            return (
+              <React.Fragment key={crumbPath}>
+                <span className="breadcrumb-sep">/</span>
+                <a onClick={() => { setCreatingFile(false); loadFiles(crumbPath); }}>{crumb}</a>
+              </React.Fragment>
+            );
+          })}
+          <span className="breadcrumb-sep">/</span>
+          <span style={{ color: 'var(--text-primary)' }}>new file</span>
+        </div>
+
+        <div className="file-viewer-header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {prefix && (
+              <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{prefix}</span>
+            )}
+            <input
+              className="form-input"
+              style={{ width: 260 }}
+              placeholder="filename.txt"
+              value={newFileName}
+              onChange={e => setNewFileName(e.target.value)}
+              autoFocus
+            />
+          </div>
+          <div className="flex gap-8">
+            <button className="btn btn-sm" onClick={cancelNewFile}>Cancel</button>
+            <button className="btn btn-primary btn-sm" onClick={handleCreateFile} disabled={creating}>
+              {creating ? <><span className="spinner" /> Creating…</> : 'Commit new file'}
+            </button>
+          </div>
+        </div>
+
+        {createError && <div className="error-banner">{createError}</div>}
+
+        <textarea
+          className="editor-textarea"
+          value={newFileContent}
+          onChange={e => setNewFileContent(e.target.value)}
+          placeholder="// File content…"
+          spellCheck={false}
+        />
+
+        <div className="form-group mt-8">
+          <label className="form-label">Commit message</label>
+          <input
+            className="form-input"
+            value={newFileCommitMsg}
+            onChange={e => setNewFileCommitMsg(e.target.value)}
+            placeholder={newFileName ? `Create ${newFileName}` : 'Create new file'}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // ── Directory listing ──────────────────────────────────────────────────────
   return (
     <div>
       <div className="branch-selector" style={{ justifyContent: 'space-between' }}>
@@ -70,14 +171,21 @@ export default function FileBrowser({ repoName, currentBranch, branches, onCheck
             {currentBranch}
           </span>
         </div>
-        <a
-          className="btn btn-sm"
-          href={api.getFolderDownloadUrl(repoName, path, currentBranch)}
-          download
-          title={path ? `Download "${path.split('/').pop()}" as ZIP` : 'Download repository as ZIP'}
-        >
-          ↓ {path ? 'Folder ZIP' : 'ZIP'}
-        </a>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {canWrite && (
+            <button className="btn btn-sm btn-primary" onClick={openNewFile}>
+              + New file
+            </button>
+          )}
+          <a
+            className="btn btn-sm"
+            href={api.getFolderDownloadUrl(repoName, path, currentBranch)}
+            download
+            title={path ? `Download "${path.split('/').pop()}" as ZIP` : 'Download repository as ZIP'}
+          >
+            ↓ {path ? 'Folder ZIP' : 'ZIP'}
+          </a>
+        </div>
       </div>
 
       {/* Breadcrumb */}
@@ -101,6 +209,11 @@ export default function FileBrowser({ repoName, currentBranch, branches, onCheck
       ) : files.length === 0 ? (
         <div className="empty-state">
           <div className="empty-title">Empty directory</div>
+          {canWrite && (
+            <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={openNewFile}>
+              + Create a file
+            </button>
+          )}
         </div>
       ) : (
         <table className="file-table">
