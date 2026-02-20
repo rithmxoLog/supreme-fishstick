@@ -82,7 +82,7 @@ function ProfileTab({ user, refreshUser }) {
           <input className="form-input" value={displayName} onChange={e => setDisplayName(e.target.value)}
             placeholder="Your full name" maxLength={80} />
           <small style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
-            Your name may appear around GitXO where you contribute.
+            Your name may appear around GitRipp where you contribute.
           </small>
         </div>
         <div className="form-group">
@@ -284,7 +284,7 @@ function PreferencesTab({ user }) {
   const set = (field) => (e) => setSettings(s => ({ ...s, [field]: e.target.value }));
 
   return (
-    <SectionCard title="Preferences" subtitle="Customize your GitXO experience.">
+    <SectionCard title="Preferences" subtitle="Customize your GitRipp experience.">
       <Banner type="success" msg={msg} />
       <Banner type="error"   msg={err} />
       <form onSubmit={save} style={{ maxWidth: 480 }}>

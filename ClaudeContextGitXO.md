@@ -284,6 +284,394 @@ idx_user_settings_user       — user_settings(user_id)
 
 ---
 
+## File Reference
+
+A complete, annotated inventory of every source file in the project. Grouped by layer and directory.
+
+---
+
+### Root Level
+
+| File | Purpose |
+|------|---------|
+| `start.bat` | Windows launcher — checks for .NET + Node, restores deps, opens two cmd windows (backend port 3001, frontend port 3000) |
+| `start.sh` | Unix/macOS launcher — same logic as start.bat but uses background processes; traps SIGINT/SIGTERM to cleanly kill both |
+| `ClaudeContextGitXO.md` | This file. Full project context, schema, roadmap, changelog, and standing instructions for Claude |
+
+---
+
+### Backend — Configuration & Entry Point
+
+| File | Purpose |
+|------|---------|
+| `backend/GitXO.Api.csproj` | MSBuild project file. Target: `net8.0`. NuGet deps: Npgsql 8.0.5, JwtBearer 8.0.0, BCrypt.Net-Next 4.0.3 |
+| `backend/appsettings.json` | Runtime config: Postgres connection string, `ReposDirectory`, JWT secret/issuer/audience/expiry, port `http://localhost:3001` |
+| `backend/Program.cs` | App entry point. Registers DI (ActivityLogger, AuthService, RepoDbService as Singletons). Configures middleware: CORS (all origins), security headers, rate limiter, authentication, authorization, controller routing. Resolves repo dirs and prints startup status. |
+
+---
+
+### Backend — Services
+
+#### `backend/Services/AuthService.cs`
+Full authentication and user management service.
+
+| Method | Description |
+|--------|-------------|
+| `RegisterAsync` | Validates, BCrypt-hashes password, inserts user. First user becomes admin. |
+| `LoginAsync` | Email+password login with account lockout (10 bad attempts → 15-min lock). |
+| `CreateRefreshTokenAsync` | 32-byte random refresh token, SHA256-hashed before DB insert. |
+| `RefreshAsync` | Validates refresh token, issues new access+refresh pair (token rotation), revokes old token. |
+| `RevokeRefreshTokenAsync` | Single token revocation. |
+| `RevokeAllSessionsAsync` | Revoke all sessions for a user. |
+| `GetActiveSessionsAsync` | Lists non-revoked, non-expired sessions with user-agent info. |
+| `RevokeSessionByIdAsync` | User can revoke a specific session by ID (own sessions only). |
+| `UpdateProfileAsync` | Update display_name, bio, avatar_url. |
+| `ChangePasswordAsync` | Verifies current password, sets new hash, revokes all sessions, clears lockout state. |
+| `ChangeEmailAsync` | Verifies current password before changing email. |
+| `GetUserSettingsAsync` | Returns preferences, auto-creates row on first access. |
+| `UpdateUserSettingsAsync` | Upserts theme, default_branch, email notification preferences. |
+| `GetTotalUsersAsync` | Count of all registered users. |
+| `ListUsersAsync` | Admin-only full user list. |
+| `DeleteUserAsync` | Admin-only user deletion. |
+| `VerifyUsernamePasswordAsync` | Username+password check used for Git HTTP Basic auth. |
+| `GetUserByIdAsync` | Fetch user record by ID. |
+| `GenerateAccessToken` | Creates 1-hour HS256 JWT with claims: sub, email, username, is_admin, jti. |
+
+**Data types:** `UserInfo`, `SessionInfo`, `UserSettings`
+
+---
+
+#### `backend/Services/ActivityLogger.cs`
+Singleton fire-and-forget audit logger. `LogEvent` spawns a background Task to INSERT into `activity_logs` (event_type, repo_name, details JSONB, user_id). Errors are swallowed and printed as warnings — never propagate to callers.
+
+---
+
+#### `backend/Services/GitRunner.cs`
+Static wrapper around the `git` CLI process.
+
+| Method | Description |
+|--------|-------------|
+| `RunAsync` | Executes any git command; returns `(stdout, stderr, exitCode)`. |
+| `StartStreaming` | Starts a git process with streaming stdout — used for `git archive` downloads. |
+| `GetBranchesAsync` | Parses `git branch` output; returns `(currentBranch, List<string> allBranches)`. |
+| `ParseLogLine` | Parses `%H\|%h\|%an\|%ae\|%ai\|%s` format → `CommitInfo` record. |
+
+**Data type:** `CommitInfo` (Hash, ShortHash, Author, Email, Date, Message)
+
+---
+
+#### `backend/Services/RepoDbService.cs`
+Database service for repository metadata and access control.
+
+| Method | Description |
+|--------|-------------|
+| `GetRepoPathAsync` | Resolves filesystem path for a repo by name. Returns null if not in DB. |
+| `GetTargetDir` | Returns the base directory for new repos. |
+| `GetRepoMetaAsync` | Fetches repo + owner info from DB. Returns `RepoMeta` or null. |
+| `CreateRepoMetaAsync` | Inserts new repo row (ON CONFLICT DO NOTHING). |
+| `DeleteRepoMetaAsync` | Deletes repo row. |
+| `UserCanWriteAsync` | True if user is owner or collaborator with write/admin role. |
+| `UserCanReadAsync` | True if user is owner or collaborator with any role (read/write/admin). |
+| `GetRepoIdAsync` | Gets numeric repo ID by name. |
+| `GetUserIdByUsernameAsync` | Gets user ID by username — used during recovery. |
+| `CreatePlaceholderUserAsync` | Inserts locked placeholder user (random BCrypt hash). Handles ON CONFLICT race via fallback SELECT. Accepts `isAdmin` flag. |
+| `HasAnyUsersAsync` | Returns true if any users exist; fails safe to true if DB is unreachable. |
+| `UpdateRepoAsync` | Updates description and/or default_branch (COALESCE semantics). |
+
+**Data type:** `RepoMeta` (Id, OwnerId, IsPublic, Description, OwnerUsername, OwnerEmail, OwnerIsAdmin, DefaultBranch)
+
+---
+
+#### `backend/Services/RepoMetaWriter.cs`
+Static helper for disaster recovery. Writes `{repoName}.meta.json` alongside each repo directory whenever a repo is created or updated; removes it on deletion.
+
+| Method | Description |
+|--------|-------------|
+| `WriteAsync` | Creates/overwrites `.meta.json` with name, ownerUsername, ownerEmail, ownerId, isPublic, description, defaultBranch, ownerIsAdmin, savedAt. |
+| `Delete` | Removes `.meta.json` for a deleted repo. |
+| `ScanAll` | Enumerates all `*.meta.json` in a directory; silently skips unparseable files. |
+
+**Data type:** `RepoMetaFile` (all fields JSON-serialized)
+
+---
+
+### Backend — Controllers
+
+#### `backend/Controllers/AuthController.cs` — `/api/auth`
+
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `POST /api/auth/register` | Rate-limited | Register new user (requires admin JWT if users already exist) |
+| `POST /api/auth/login` | Rate-limited | Email+password login; returns accessToken + refreshToken |
+| `POST /api/auth/refresh` | None | Exchange refreshToken for new token pair |
+| `POST /api/auth/logout` | JWT | Revoke one or all refresh tokens |
+| `GET /api/auth/me` | JWT | Current user profile |
+| `PUT /api/auth/profile` | JWT | Update displayName, bio, avatarUrl |
+| `PUT /api/auth/password` | JWT | Change password (revokes all sessions) |
+| `PUT /api/auth/email` | JWT | Change email (requires current password) |
+| `GET /api/auth/settings` | JWT | Fetch user preferences |
+| `PUT /api/auth/settings` | JWT | Update user preferences |
+| `GET /api/auth/sessions` | JWT | List active sessions |
+| `DELETE /api/auth/sessions/{id}` | JWT | Revoke specific session |
+| `GET /api/auth/users` | JWT admin | List all users |
+| `DELETE /api/auth/users/{id}` | JWT admin | Delete user (cannot delete self) |
+
+---
+
+#### `backend/Controllers/ReposController.cs` — `/api/repos`
+
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `GET /api/repos` | None | List repos; supports `?search=` and `?publicOnly=true` |
+| `GET /api/repos/{name}` | None | Repo details: branches, last commit, write-access flag |
+| `POST /api/repos` | JWT | Create repo (init git, write README, write `.meta.json`) |
+| `DELETE /api/repos/{name}` | JWT owner/admin | Delete repo from disk and DB |
+| `PATCH /api/repos/{name}` | JWT owner/admin | Update description / defaultBranch; keeps `.meta.json` in sync |
+| `POST /api/repos/recover` | Anonymous (bootstrap) / JWT admin | Scan `.meta.json` files and re-insert repos into DB; creates placeholder users if DB was fully wiped |
+
+---
+
+#### `backend/Controllers/FilesController.cs` — `/api/repos/{name}/...`
+
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `GET /{name}/files?path=` | None (public repos) | Directory listing with last-commit info per file |
+| `GET /{name}/file?path=` | None (public repos) | File content; detects binary files |
+| `POST /{name}/file` | JWT + write | Save/create file and commit |
+| `DELETE /{name}/file` | JWT + write | Delete file and commit |
+| `POST /{name}/push` | JWT + write | Bulk multipart upload and commit (100 MB limit) |
+| `POST /{name}/upload-zip` | JWT + write | Extract ZIP and commit (200 MB limit); strips `node_modules` |
+| `GET /{name}/download` | None (public repos) | Download full repo as ZIP |
+| `GET /{name}/download/file` | None (public repos) | Download single file |
+| `GET /{name}/download/folder` | None (public repos) | Download folder as ZIP via `git archive` |
+
+Path traversal is blocked via `SafeJoin` validation. Binary detection scans first 512 bytes.
+
+---
+
+#### `backend/Controllers/BranchesController.cs` — `/api/repos/{name}/...`
+
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `GET /{name}/branches` | None | List branches with current-branch indicator |
+| `POST /{name}/branches` | JWT + write | Create branch |
+| `POST /{name}/checkout` | JWT + write | Checkout branch |
+| `POST /{name}/merge` | JWT + write | Merge source into target; reports conflicts |
+| `DELETE /{name}/branches/{branch}` | JWT + write | Delete branch (cannot delete currently checked-out branch) |
+
+Branch names validated against `^[a-zA-Z0-9_\-\/\.]+$`.
+
+---
+
+#### `backend/Controllers/CommitsController.cs` — `/api/repos/{name}/...`
+
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `GET /{name}/commits?branch=&limit=` | None | Commit list (default 50, max 500) |
+| `GET /{name}/commits/{hash}` | None | Commit detail with full unified diff (`git show --patch`) |
+| `GET /{name}/diff?from=&to=` | None | Diff between two refs + commit list between them |
+
+Output is unified diff format, consumed by diff2html on the frontend.
+
+---
+
+#### `backend/Controllers/IssuesController.cs` — `/api/repos/{repoName}/issues`
+
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `GET` | None (public repos) | List issues; filter by `?status=open\|closed` |
+| `GET /{number}` | None (public repos) | Issue detail with all comments |
+| `POST` | JWT | Create issue (auto-increments number per repo) |
+| `PATCH /{number}` | JWT (author or write collaborator) | Update title/body/status |
+| `POST /{number}/comments` | JWT + read access | Add comment |
+
+---
+
+#### `backend/Controllers/LogsController.cs` — `/api/logs`
+
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `GET /api/logs` | None | Query activity log; filters: repo, event_type, from, to, limit (max 500), offset |
+| `GET /api/logs/event-types` | None | List distinct event types for UI filter dropdown |
+
+---
+
+#### `backend/Controllers/HealthController.cs` — `/api/health`
+
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `GET /api/health` | None | Returns `{ status: "ok", message: "GitXO backend is running" }` |
+
+---
+
+#### `backend/Controllers/GitController.cs` — `/api/git`
+
+Implements the **Git Smart HTTP protocol** so native `git clone` and `git push` work against GitXO.
+
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `GET /{*path}?service=git-upload-pack` | None (public) / Basic (private) | Advertise refs for clone/fetch |
+| `POST /{*path}/git-upload-pack` | None (public) / Basic (private) | Pack protocol for clone/fetch |
+| `POST /{*path}/git-receive-pack` | Basic (always) | Pack protocol for push |
+
+Public repos allow unauthenticated clone. All pushes require HTTP Basic auth (GitXO username + password). Streams large payloads directly without buffering. Helper `ParseGitPath` extracts repo name and service name from the URL path (tuple element named `Service`, not `Rest` — reserved in C# ValueTuple).
+
+---
+
+### Backend — Migrations
+
+| File | Description |
+|------|-------------|
+| `backend/Migrations/001_schema.sql` | Initial schema: `users`, `repositories`, `repo_collaborators`, `issues`, `issue_comments`, `activity_logs` with all base indexes |
+| `backend/Migrations/002_refresh_tokens.sql` | Adds `refresh_tokens` table for JWT session management |
+| `backend/Migrations/003_user_settings.sql` | Adds `user_settings` table; adds optimized active-sessions index on `refresh_tokens` |
+| `backend/Migrations/004_write_permissions_indexes.sql` | Adds indexes: `idx_repos_name`, `idx_collab_write_lookup`, `idx_logs_event_type`, `idx_logs_user_id` |
+| `backend/Migrations/005_login_security.sql` | Adds `failed_login_attempts` and `locked_until` columns to `users`; sparse index on `locked_until` |
+
+Run all in order: `001` → `002` → `003` → `004` → `005`.
+
+---
+
+### Frontend — Core
+
+| File | Purpose |
+|------|---------|
+| `frontend/src/index.js` | React entry point. Renders `<App />` in `React.StrictMode` into `#root`. |
+| `frontend/src/App.js` | Root component. Wraps app in `AuthProvider`. Defines all client routes (see below). Renders `<Navbar />` on every page. |
+| `frontend/craco.config.js` | CRA config override (via `@craco/craco`). Currently minimal. |
+
+**Routes defined in App.js:**
+
+| Path | Component | Guard |
+|------|-----------|-------|
+| `/login` | LoginPage | Public |
+| `/` | ExplorePage | PrivateRoute |
+| `/repos/:repoName/*` | RepoView | PrivateRoute |
+| `/activity` | ActivityLog | PrivateRoute |
+| `/settings` | SettingsPage | PrivateRoute |
+
+---
+
+### Frontend — Context & Auth
+
+#### `frontend/src/contexts/AuthContext.js`
+Global auth state. Manages `user`, `token`, and `refreshToken` in localStorage.
+
+| Export | Description |
+|--------|-------------|
+| `AuthProvider` | Wraps app; loads persisted tokens on boot, auto-refreshes on startup |
+| `useAuth()` | Hook returning `{ user, token, loading, login, logout, refreshUser, setUser }` |
+
+On 401 responses, dispatches `gitxoAuthExpired` custom event; `AuthContext` listens and calls `logout()` automatically. LocalStorage keys: `gitxo_access_token`, `gitxo_refresh_token`.
+
+---
+
+### Frontend — API Client
+
+#### `frontend/src/api/index.js`
+Centralized HTTP client. Auto-injects `Authorization: Bearer <token>` on every request. On 401, calls `tryRefresh()` and retries once before emitting `gitxoAuthExpired`.
+
+**Exported `api` object — all methods:**
+
+| Category | Methods |
+|----------|---------|
+| Auth | `login`, `register`, `refresh`, `logout`, `getMe`, `updateProfile`, `changePassword`, `changeEmail`, `getSettings`, `updateSettings`, `getSessions`, `revokeSession`, `listUsers`, `deleteUser` |
+| Repos | `listRepos`, `getRepo`, `createRepo`, `deleteRepo` |
+| Files | `listFiles`, `getFile`, `saveFile`, `deleteFile`, `pushFiles`, `uploadZip`, `uploadZipWithProgress` |
+| Branches | `listBranches`, `createBranch`, `checkoutBranch`, `mergeBranch`, `deleteBranch` |
+| Commits | `listCommits`, `getCommit`, `getBranchDiff` |
+| Issues | `listIssues`, `getIssue`, `createIssue`, `updateIssue`, `addComment` |
+| Logs | `getLogs`, `getLogEventTypes` |
+| URL builders | `getFileDownloadUrl`, `getRepoDownloadUrl`, `getFolderDownloadUrl` |
+
+`uploadZipWithProgress` uses `XMLHttpRequest` (not fetch) so `xhr.upload.onprogress` fires during upload.
+
+---
+
+### Frontend — Components
+
+#### `frontend/src/components/Navbar.js`
+Top navigation bar. Shows GitXO logo, Explore link, Activity link (admin only), and a user dropdown (avatar → username/email, Settings, Sign out). Shows "Sign in" button if unauthenticated. Dropdown closes on outside click.
+
+---
+
+#### `frontend/src/components/PrivateRoute.js`
+Route guard. Shows loading spinner while auth resolves. Redirects to `/login` (with `location.state.from`) if unauthenticated. Renders children if authenticated.
+
+---
+
+#### `frontend/src/components/RepoView.js`
+Repository detail page shell. Fetches repo metadata and renders tabbed interface:
+
+| Tab | Component | Visibility |
+|-----|-----------|------------|
+| Code | FileBrowser | All |
+| Commits | CommitHistory | All |
+| Branches | BranchManager | All |
+| Issues | IssuesPage | All |
+| Push | PushPanel | Write access only |
+
+Also renders: repo name + description header, owner badge, public/private badge, clone URL (copy-to-clipboard), ZIP download button, delete button (owner/admin only), git push instructions for write users.
+
+---
+
+#### `frontend/src/components/FileBrowser.js`
+File/directory explorer. Features: breadcrumb navigation, file icons by extension, last-commit message+date per entry, relative timestamps, click-through navigation. If `canWrite=true`: shows `+ New file` button that opens an inline editor (filename scoped to current path, content textarea, commit message, Commit/Cancel). Empty-dir CTA also shown for write users.
+
+---
+
+#### `frontend/src/components/FileViewer.js`
+Single file viewer/editor. Syntax highlighting via `react-syntax-highlighter` (vscDarkPlus, 30+ languages). Edit mode opens a textarea; saving commits the change. Delete file commits deletion. Download button available. Binary files detected and handled gracefully. Breadcrumb back-navigation included.
+
+---
+
+#### `frontend/src/components/CommitHistory.js`
+Commit log viewer. Lists commits for the selected branch (newest first) with message, author, and date. "View diff" toggle loads and renders the patch with diff2html (side-by-side). Diffs are fetched lazily on demand.
+
+---
+
+#### `frontend/src/components/BranchManager.js`
+Branch management UI. Lists all branches with current-branch indicator. Actions: create (from any existing branch), checkout, delete (blocked if currently checked out). Compare tab: select from/to branches, view commit count ahead, list of commits between them, rendered side-by-side diff via diff2html.
+
+---
+
+#### `frontend/src/components/PushPanel.js`
+Advanced upload interface. Single drop zone accepts files, folders (via `webkitdirectory`), or a `.zip`. Three staging buttons: Select Files / Select Folder / Select ZIP. Staged files shown in collapsible tree (dirs expand/collapse, files show size + remove button). `node_modules` filtered at ingestion. Client-side JSZip DEFLATE compression for files/folders before upload. Two-phase progress bar: compress 0–50%, upload 50–100%. Commit form: branch selector, commit message, optional author name/email. ZIP files are sent raw without re-compression.
+
+---
+
+#### `frontend/src/components/ActivityLog.js`
+Admin audit log viewer. Table of system events with filters: repo name, event type, date range, page size. Pagination. Auto-refresh toggle (10-second interval). Expandable rows for JSONB detail metadata. Event type options populated from server. Write events highlighted.
+
+---
+
+### Frontend — Pages
+
+#### `frontend/src/pages/ExplorePage.js`
+Homepage / repo discovery. Hero section with search input. Repo grid cards showing name, description, owner, public/private badge, current branch, last commit. Create repo dialog (name, description, public/private). Delete button visible to repo owner. Empty state with call-to-action.
+
+---
+
+#### `frontend/src/pages/LoginPage.js`
+Login form. Email + password fields, loading state, error display. On success, redirects to `location.state.from` or `/`.
+
+---
+
+#### `frontend/src/pages/IssuesPage.js`
+Issue list for a repo. Open/Closed filter tabs. Create issue dialog (title, body). List rows show issue number, title, author, creation date, comment count. Click to navigate to IssueDetail.
+
+---
+
+#### `frontend/src/pages/IssueDetail.js`
+Single issue view. Shows title, body, status, author, dates. Comment thread below. Add comment form. Status toggle (open/close) for author or write collaborators.
+
+---
+
+#### `frontend/src/pages/SettingsPage.js`
+User account settings. Sections: profile (displayName, bio, avatarUrl), password change, email change, preferences (theme, defaultBranch, email notification toggles), session management (list active sessions, revoke individual sessions or all at once).
+
+---
+
 ## Changelog
 
 ### 2026-02-20
@@ -470,3 +858,32 @@ idx_user_settings_user       — user_settings(user_id)
 1. Run the migration: `psql -U postgres -d gitxo -f backend/Migrations/005_login_security.sql`
 2. Restart the backend server so the new rate limiter and security headers middleware take effect.
 3. Nothing else — rate limiting is built into .NET 8, no new NuGet packages required.
+
+---
+
+#### Documentation: Full File Reference Section Added
+
+**Changes:**
+
+- **[ClaudeContextGitXO.md]** Added new **"File Reference"** section between "Dev Notes" and "Changelog". Covers all 43 source files across root, backend, and frontend layers. Each file is documented with: purpose, key methods/endpoints/components, auth requirements, data types, and notable implementation details. Structured as tables and subsections for fast lookup. Written by reading every actual source file, not inferred from filenames.
+
+#### What you need to do
+Nothing — documentation-only change, no code modified.
+
+---
+
+#### Rebrand: Rename "GitXO" → "GitRipp" in UI Display Text
+
+**Changes:**
+
+- **[frontend/src/components/Navbar.js]** Brand name in nav bar: `GitXO` → `GitRipp`
+- **[frontend/src/pages/LoginPage.js]** Login page heading: `Sign in to GitXO` → `Sign in to GitRipp`
+- **[frontend/src/components/ActivityLog.js]** Empty-state message: `...start using GitXO` → `...start using GitRipp`
+- **[frontend/src/pages/SettingsPage.js]** Two strings updated: profile helper text and Preferences section subtitle
+- **[frontend/src/components/PushPanel.js]** Three placeholder strings updated: commit message input, author name input, author email input (`gitxo@local` → `gitripp@local`)
+- **[frontend/src/components/RepoView.js]** Git push credential hint: `your GitXO username + password` → `your GitRipp username + password`
+
+Internal identifiers left unchanged (localStorage keys `gitxo_access_token`/`gitxo_refresh_token`, custom event name `gitxoAuthExpired`) — these are implementation details, not visible to users.
+
+#### What you need to do
+Nothing — frontend will hot-reload automatically if the dev server is running.

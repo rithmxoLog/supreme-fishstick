@@ -342,7 +342,7 @@ export default function PushPanel({ repoName, currentBranch, branches, onRefresh
               className="form-input"
               value={commitMsg}
               onChange={e => setCommitMsg(e.target.value)}
-              placeholder="Add files via GitXO push"
+              placeholder="Add files via GitRipp push"
             />
           </div>
 
@@ -358,11 +358,11 @@ export default function PushPanel({ repoName, currentBranch, branches, onRefresh
               <div style={{ marginTop: 10, display: 'flex', gap: 12 }}>
                 <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
                   <label className="form-label">Author name</label>
-                  <input className="form-input" value={authorName} onChange={e => setAuthorName(e.target.value)} placeholder="GitXO User" />
+                  <input className="form-input" value={authorName} onChange={e => setAuthorName(e.target.value)} placeholder="GitRipp User" />
                 </div>
                 <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
                   <label className="form-label">Author email</label>
-                  <input className="form-input" value={authorEmail} onChange={e => setAuthorEmail(e.target.value)} placeholder="gitxo@local" />
+                  <input className="form-input" value={authorEmail} onChange={e => setAuthorEmail(e.target.value)} placeholder="gitripp@local" />
                 </div>
               </div>
             )}

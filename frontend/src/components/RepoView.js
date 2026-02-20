@@ -121,7 +121,7 @@ export default function RepoView() {
         {canWrite && (
           <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
             Push: <code style={{ fontSize: 11 }}>git push {cloneUrl} {currentBranch}</code>
-            {' — use your GitXO username + password when prompted'}
+            {' — use your GitRipp username + password when prompted'}
           </div>
         )}
       </div>

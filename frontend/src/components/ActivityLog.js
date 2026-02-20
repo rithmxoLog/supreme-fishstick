@@ -194,7 +194,7 @@ export default function ActivityLog() {
                 <td colSpan={4} style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-secondary)' }}>
                   <div style={{ fontSize: 28, marginBottom: 8 }}>🕐</div>
                   <div>No activity logged yet</div>
-                  <div style={{ fontSize: 12, marginTop: 4 }}>Events will appear here once you start using GitXO.</div>
+                  <div style={{ fontSize: 12, marginTop: 4 }}>Events will appear here once you start using GitRipp.</div>
                 </td>
               </tr>
             )}
