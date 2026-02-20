@@ -33,16 +33,12 @@ public class ReposController : ControllerBase
             var userId = GetUserId();
             var repos = new List<object>();
 
-            // We enumerate known repos from DB plus any legacy unregistered repos
-            // by scanning both directories
+            // Enumerate all repos from the single shared directory
             var allDirs = new List<string>();
-            var publicDir  = _repoDb.GetTargetDir(true);
-            var privateDir = _repoDb.GetTargetDir(false);
+            var reposDir = _repoDb.GetTargetDir();
 
-            if (Directory.Exists(publicDir))
-                allDirs.AddRange(Directory.GetDirectories(publicDir));
-            if (Directory.Exists(privateDir))
-                allDirs.AddRange(Directory.GetDirectories(privateDir));
+            if (Directory.Exists(reposDir))
+                allDirs.AddRange(Directory.GetDirectories(reposDir));
 
             foreach (var dir in allDirs)
             {
@@ -225,13 +221,6 @@ public class ReposController : ControllerBase
     public async Task<IActionResult> DeleteRepo(string name)
     {
         var userId = GetUserId();
-        var meta = await _repoDb.GetRepoMetaAsync(name);
-        var isAdmin = User.FindFirstValue("is_admin") == "true";
-
-        if (meta == null && !isAdmin)
-            return Forbid();
-        if (meta != null && meta.OwnerId != userId && !isAdmin)
-            return Forbid();
 
         var repoPath = await _repoDb.GetRepoPathAsync(name);
         if (repoPath == null)
@@ -315,16 +304,14 @@ public class ReposController : ControllerBase
         if (hasUsers && !isAdmin)
             return StatusCode(403, new { error = "Admin access required. Provide an admin JWT in the Authorization header." });
 
-        var publicDir  = _repoDb.GetTargetDir(true);
-        var privateDir = _repoDb.GetTargetDir(false);
+        var reposDir = _repoDb.GetTargetDir();
 
         var recovered           = new List<object>();
         var skipped             = new List<string>();
         var failed              = new List<object>();
         var placeholdersCreated = new List<string>(); // usernames of newly-created placeholder accounts
 
-        var allMeta = RepoMetaWriter.ScanAll(publicDir)
-            .Concat(RepoMetaWriter.ScanAll(privateDir));
+        var allMeta = RepoMetaWriter.ScanAll(reposDir);
 
         foreach (var meta in allMeta)
         {

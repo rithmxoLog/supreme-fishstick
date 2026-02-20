@@ -131,7 +131,7 @@ export default function ExplorePage() {
                   }
                 </div>
               </div>
-              {user && (repo.owner === user.username || user.isAdmin) && (
+              {user && (
                 <button
                   className="btn btn-danger btn-sm"
                   style={{ alignSelf: 'flex-start', marginTop: 8 }}

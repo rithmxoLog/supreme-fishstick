@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("GitXO.Api")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+022fd5d53a403513c85bd03ab5e83e44bd003eaa")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+bbd89c44ad782a0e75a08c08784541bc1859ac42")]
 [assembly: System.Reflection.AssemblyProductAttribute("GitXO.Api")]
 [assembly: System.Reflection.AssemblyTitleAttribute("GitXO.Api")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
