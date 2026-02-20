@@ -1,7 +1,15 @@
 # Gitripp — Project Context for Claude
 
-## Standing Instruction
-**After every Claude message that makes a change, append an entry to the Changelog at the bottom of this file.** Log every file created or modified, every bug fixed, every feature added, every schema change, and any new issues discovered. Each entry should be grouped under the current date and include a short description of what changed and which files were affected. Be sure to document this comprehensively. 
+## Standing Instructions
+
+**1. Changelog** — After every Claude message that makes a change, append an entry to the Changelog at the bottom of this file. Log every file created or modified, every bug fixed, every feature added, every schema change, and any new issues discovered. Each entry should be grouped under the current date and include a short description of what changed and which files were affected. Be thorough.
+
+**2. "What you need to do" section** — Every changelog entry must end with a **"What you need to do"** block. This block should list every manual action the user must take as a result of the changes: running migrations, installing packages, restarting servers, setting environment variables, running commands, updating config files, etc. Format it as a numbered list. If nothing is required, write "Nothing — changes are code-only." Example format:
+
+> #### What you need to do
+> 1. Run the migration: `psql -U postgres -d gitxo -f backend/Migrations/005_login_security.sql`
+> 2. Restart the backend server.
+> 3. Nothing else — no new packages required.
 
 ---
 
@@ -418,3 +426,47 @@ idx_user_settings_user       — user_settings(user_id)
     - Re-fetches the row via `GetRepoMetaAsync` and calls `RepoMetaWriter.WriteAsync` with the refreshed values, keeping the meta file permanently in sync with the database.
     - If `description` is provided, also overwrites `.git/description` to keep git's internal description in sync.
     - Logs a `REPO_UPDATED` activity event.
+
+---
+
+#### Feature: Login-First Navigation & Security Hardening
+
+**Problem:** The app root (`/`) loaded `ExplorePage` without requiring authentication. No rate limiting, no account lockout, and no security headers were in place.
+
+**Changes:**
+
+- **[frontend/src/App.js]** Wrapped `ExplorePage` in `<PrivateRoute>` so `/` now redirects unauthenticated visitors to `/login`. After login, `PrivateRoute` automatically redirects back to the originally requested path via `location.state.from`.
+
+- **[backend/Program.cs]**
+  - Added `using System.Threading.RateLimiting` and `using Microsoft.AspNetCore.RateLimiting` (both built into .NET 8 — no new NuGet packages needed).
+  - Registered a `"auth"` rate-limit policy using `AddRateLimiter` + `RateLimitPartition.GetFixedWindowLimiter`: max **10 requests per IP per 5 minutes** on auth endpoints; returns HTTP 429 when exceeded.
+  - Added `app.UseRateLimiter()` in the middleware pipeline (before `UseAuthentication`).
+  - Added a security-headers middleware before the rate limiter:
+    - `X-Content-Type-Options: nosniff` — prevents MIME-type sniffing
+    - `X-Frame-Options: DENY` — blocks clickjacking via iframes
+    - `Referrer-Policy: strict-origin-when-cross-origin`
+    - `X-XSS-Protection: 1; mode=block`
+    - `Permissions-Policy: geolocation=(), camera=(), microphone=()`
+
+- **[backend/Controllers/AuthController.cs]**
+  - Added `using Microsoft.AspNetCore.RateLimiting`.
+  - Applied `[EnableRateLimiting("auth")]` to both `Register` and `Login` action methods.
+
+- **[backend/Services/AuthService.cs]**
+  - **Password minimum length raised from 8 → 12 characters** in `RegisterAsync`.
+  - **Account lockout logic added to `LoginAsync`**:
+    - Reads new `failed_login_attempts` (int) and `locked_until` (timestamptz) columns from the `users` row.
+    - If `locked_until > NOW()`, rejects login immediately with remaining time in minutes.
+    - On wrong password: increments `failed_login_attempts`; if it reaches **10**, sets `locked_until = NOW() + 15 minutes`.
+    - On correct password: resets both columns to `0` / `NULL`.
+  - **`ChangePasswordAsync`**: reset also clears `failed_login_attempts = 0` and `locked_until = NULL` so an admin password reset always unlocks the account.
+
+- **[backend/Migrations/005_login_security.sql]** New migration:
+  - `ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_attempts INT NOT NULL DEFAULT 0`
+  - `ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ`
+  - Sparse index on `locked_until WHERE locked_until IS NOT NULL` for efficient lockout queries.
+
+#### What you need to do
+1. Run the migration: `psql -U postgres -d gitxo -f backend/Migrations/005_login_security.sql`
+2. Restart the backend server so the new rate limiter and security headers middleware take effect.
+3. Nothing else — rate limiting is built into .NET 8, no new NuGet packages required.

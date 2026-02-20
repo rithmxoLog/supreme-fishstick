@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.RateLimiting;
 using System.Security.Claims;
 using GitXO.Api.Services;
 
@@ -21,6 +22,7 @@ public class AuthController : ControllerBase
     // POST /api/auth/register
     // Open when no users exist (first admin); otherwise requires an existing admin.
     [HttpPost("register")]
+    [EnableRateLimiting("auth")]
     public async Task<IActionResult> Register([FromBody] RegisterRequest body)
     {
         var callerIsAdmin = User.Identity?.IsAuthenticated == true &&
@@ -41,6 +43,7 @@ public class AuthController : ControllerBase
 
     // POST /api/auth/login
     [HttpPost("login")]
+    [EnableRateLimiting("auth")]
     public async Task<IActionResult> Login([FromBody] LoginRequest body)
     {
         var (success, error, user, accessToken) = await _auth.LoginAsync(body.Email, body.Password);

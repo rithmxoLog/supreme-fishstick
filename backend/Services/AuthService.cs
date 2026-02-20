@@ -44,8 +44,8 @@ public class AuthService
             return (false, "Username must be 3–30 alphanumeric characters, dashes, or underscores", null, null);
         if (string.IsNullOrWhiteSpace(email) || !email.Contains('@'))
             return (false, "Invalid email address", null, null);
-        if (string.IsNullOrWhiteSpace(password) || password.Length < 8)
-            return (false, "Password must be at least 8 characters", null, null);
+        if (string.IsNullOrWhiteSpace(password) || password.Length < 12)
+            return (false, "Password must be at least 12 characters", null, null);
 
         var hash = BCrypt.Net.BCrypt.HashPassword(password);
 
@@ -98,6 +98,9 @@ public class AuthService
 
     // ── Login ─────────────────────────────────────────────────
 
+    private const int MaxFailedAttempts = 10;
+    private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
+
     public async Task<(bool Success, string? Error, UserInfo? User, string? Token)> LoginAsync(
         string email, string password)
     {
@@ -107,24 +110,68 @@ public class AuthService
             await conn.OpenAsync();
 
             await using var cmd = conn.CreateCommand();
-            cmd.CommandText = "SELECT id, username, email, password_hash, is_admin, created_at FROM users WHERE email = $1";
+            cmd.CommandText = @"
+                SELECT id, username, email, password_hash, is_admin, created_at,
+                       failed_login_attempts, locked_until
+                FROM users WHERE email = $1";
             cmd.Parameters.Add(new NpgsqlParameter { Value = email });
 
-            await using var reader = await cmd.ExecuteReaderAsync();
-            if (!await reader.ReadAsync())
-                return (false, "Invalid email or password", null, null);
+            long id; string username, storedHash; bool isAdmin; DateTime createdAt;
+            int failedAttempts; DateTime? lockedUntil;
 
-            var storedHash = reader.GetString(3);
+            await using (var reader = await cmd.ExecuteReaderAsync())
+            {
+                if (!await reader.ReadAsync())
+                    return (false, "Invalid email or password", null, null);
+
+                id            = reader.GetInt64(0);
+                username      = reader.GetString(1);
+                storedHash    = reader.GetString(3);
+                isAdmin       = reader.GetBoolean(4);
+                createdAt     = reader.GetDateTime(5);
+                failedAttempts = reader.GetInt32(6);
+                lockedUntil   = reader.IsDBNull(7) ? null : reader.GetDateTime(7);
+            }
+
+            // Check account lockout
+            if (lockedUntil.HasValue && lockedUntil.Value > DateTime.UtcNow)
+            {
+                var mins = (int)Math.Ceiling((lockedUntil.Value - DateTime.UtcNow).TotalMinutes);
+                return (false, $"Account temporarily locked. Try again in {mins} minute(s).", null, null);
+            }
+
             if (!BCrypt.Net.BCrypt.Verify(password, storedHash))
+            {
+                var newFailed = failedAttempts + 1;
+                DateTime? newLock = newFailed >= MaxFailedAttempts
+                    ? DateTime.UtcNow.Add(LockoutDuration)
+                    : null;
+
+                await using var failCmd = conn.CreateCommand();
+                failCmd.CommandText = @"
+                    UPDATE users SET failed_login_attempts = $2, locked_until = $3 WHERE id = $1";
+                failCmd.Parameters.Add(new NpgsqlParameter { Value = id });
+                failCmd.Parameters.Add(new NpgsqlParameter { Value = newFailed });
+                failCmd.Parameters.Add(new NpgsqlParameter { Value = (object?)newLock ?? DBNull.Value });
+                await failCmd.ExecuteNonQueryAsync();
+
                 return (false, "Invalid email or password", null, null);
+            }
+
+            // Successful login — reset lockout counters
+            await using var resetCmd = conn.CreateCommand();
+            resetCmd.CommandText = @"
+                UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = $1";
+            resetCmd.Parameters.Add(new NpgsqlParameter { Value = id });
+            await resetCmd.ExecuteNonQueryAsync();
 
             var user = new UserInfo
             {
-                Id = reader.GetInt64(0),
-                Username = reader.GetString(1),
-                Email = reader.GetString(2),
-                IsAdmin = reader.GetBoolean(4),
-                CreatedAt = reader.GetDateTime(5)
+                Id        = id,
+                Username  = username,
+                Email     = email,
+                IsAdmin   = isAdmin,
+                CreatedAt = createdAt
             };
 
             return (true, null, user, GenerateAccessToken(user));
@@ -338,7 +385,11 @@ public class AuthService
 
             var newHash = BCrypt.Net.BCrypt.HashPassword(newPassword);
             await using var updateCmd = conn.CreateCommand();
-            updateCmd.CommandText = "UPDATE users SET password_hash = $2, updated_at = NOW() WHERE id = $1";
+            updateCmd.CommandText = @"
+                UPDATE users
+                SET password_hash = $2, updated_at = NOW(),
+                    failed_login_attempts = 0, locked_until = NULL
+                WHERE id = $1";
             updateCmd.Parameters.Add(new NpgsqlParameter { Value = userId });
             updateCmd.Parameters.Add(new NpgsqlParameter { Value = newHash });
             await updateCmd.ExecuteNonQueryAsync();

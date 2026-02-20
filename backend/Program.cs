@@ -1,6 +1,8 @@
 using System.Text;
+using System.Threading.RateLimiting;
 using GitXO.Api.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -35,6 +37,21 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization();
 builder.Services.AddControllers();
+
+// Rate limiting: max 10 requests per IP per 5 minutes on auth endpoints
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddPolicy("auth", httpCtx =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpCtx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(5),
+                QueueLimit = 0
+            }));
+    options.RejectionStatusCode = 429;
+});
 builder.Services.AddSingleton<ActivityLogger>();
 builder.Services.AddSingleton<AuthService>();
 builder.Services.AddSingleton<RepoDbService>();
@@ -61,6 +78,19 @@ var dbLogger = app.Services.GetRequiredService<ActivityLogger>();
 await dbLogger.TestConnectionAsync();
 
 app.UseCors();
+
+// Security response headers
+app.Use(async (ctx, next) =>
+{
+    ctx.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    ctx.Response.Headers["X-Frame-Options"] = "DENY";
+    ctx.Response.Headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+    ctx.Response.Headers["X-XSS-Protection"] = "1; mode=block";
+    ctx.Response.Headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()";
+    await next();
+});
+
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();

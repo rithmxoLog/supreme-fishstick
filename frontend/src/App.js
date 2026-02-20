@@ -18,7 +18,7 @@ export default function App() {
         <div className="app-body">
           <Routes>
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/" element={<ExplorePage />} />
+            <Route path="/" element={<PrivateRoute><ExplorePage /></PrivateRoute>} />
             <Route path="/repos/:repoName/*" element={<PrivateRoute><RepoView /></PrivateRoute>} />
             <Route path="/activity" element={<PrivateRoute><ActivityLog /></PrivateRoute>} />
             <Route path="/settings" element={<PrivateRoute><SettingsPage /></PrivateRoute>} />
