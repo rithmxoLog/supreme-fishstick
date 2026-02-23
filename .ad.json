@@ -1,7 +1,9 @@
 {
   "name": "gitripp",
   "framework": "node",
-"buildCommand": "cd frontend && npm ci && npm run build && mkdir -p ../backend/public && cp -r build/* ../backend/public/ && cd ../backend && npm ci",
-  "startCommand": "cd backend && npm start",
-  "isDualServer": true
+  "isDualServer": true,
+
+  "buildCommand": "cd frontend && npm ci && npm run build && mkdir -p ../backend/public && cp -r build/* ../backend/public/ && cd ../backend && dotnet publish -c Release -o .",
+
+  "startCommand": "cd backend && dotnet gitripp-backend.dll"
 }
