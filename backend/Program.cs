@@ -7,7 +7,8 @@ using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.WebHost.UseUrls(builder.Configuration["Urls"] ?? "http://localhost:3001");
+var appPort = Environment.GetEnvironmentVariable("APP_PORT") ?? "3001";
+builder.WebHost.UseUrls($"http://localhost:{appPort}");
 
 // Raise Kestrel's hard body-size cap so large ZIP/push uploads aren't
 // connection-reset before the per-endpoint [RequestSizeLimit] filter runs.
@@ -116,7 +117,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 
-Console.WriteLine($"GitXO backend running at http://localhost:3001");
+Console.WriteLine($"GitXO backend running at http://localhost:{appPort}");
 Console.WriteLine($"Public repositories:  {reposDir}");
 Console.WriteLine($"Private repositories: {privateReposDir}");
 

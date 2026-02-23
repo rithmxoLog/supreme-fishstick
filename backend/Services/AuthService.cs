@@ -19,13 +19,7 @@ public class AuthService
 
     public AuthService(IConfiguration config)
     {
-        var pg = config.GetSection("Postgres");
-        _connectionString =
-            $"Host={pg["Host"] ?? "localhost"};" +
-            $"Port={pg["Port"] ?? "5432"};" +
-            $"Database={pg["Database"] ?? "gitxo"};" +
-            $"Username={pg["Username"] ?? "postgres"};" +
-            $"Password={pg["Password"] ?? ""}";
+        _connectionString = config.GetConnectionString("DefaultConnection") ?? BuildLocalConnectionString(config);
 
         var jwt = config.GetSection("Jwt");
         _jwtSecret = jwt["Secret"] ?? "gitxo-default-secret-change-this-now-32chars";
@@ -671,6 +665,16 @@ public class AuthService
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
         return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    private static string BuildLocalConnectionString(IConfiguration config)
+    {
+        var pg = config.GetSection("Postgres");
+        return $"Host={pg["Host"] ?? "localhost"};" +
+            $"Port={pg["Port"] ?? "5432"};" +
+            $"Database={pg["Database"] ?? "gitxo"};" +
+            $"Username={pg["Username"] ?? "postgres"};" +
+            $"Password={pg["Password"] ?? ""}";
     }
 }
 

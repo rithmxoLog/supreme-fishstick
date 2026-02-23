@@ -9,13 +9,7 @@ public class RepoDbService
 
     public RepoDbService(IConfiguration config)
     {
-        var pg = config.GetSection("Postgres");
-        _connectionString =
-            $"Host={pg["Host"] ?? "localhost"};" +
-            $"Port={pg["Port"] ?? "5432"};" +
-            $"Database={pg["Database"] ?? "gitxo"};" +
-            $"Username={pg["Username"] ?? "postgres"};" +
-            $"Password={pg["Password"] ?? ""}";
+        _connectionString = config.GetConnectionString("DefaultConnection") ?? BuildLocalConnectionString(config);
 
         _reposDir = config["ReposDirectory"] ?? "repositories";
     }
@@ -273,6 +267,16 @@ public class RepoDbService
             return true;
         }
         catch { return false; }
+    }
+
+    private static string BuildLocalConnectionString(IConfiguration config)
+    {
+        var pg = config.GetSection("Postgres");
+        return $"Host={pg["Host"] ?? "localhost"};" +
+            $"Port={pg["Port"] ?? "5432"};" +
+            $"Database={pg["Database"] ?? "gitxo"};" +
+            $"Username={pg["Username"] ?? "postgres"};" +
+            $"Password={pg["Password"] ?? ""}";
     }
 }
 

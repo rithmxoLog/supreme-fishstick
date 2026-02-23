@@ -10,9 +10,13 @@ public class ActivityLogger
 
     public ActivityLogger(IConfiguration config)
     {
+        _connectionString = config.GetConnectionString("DefaultConnection") ?? BuildLocalConnectionString(config);
+    }
+
+    private static string BuildLocalConnectionString(IConfiguration config)
+    {
         var pg = config.GetSection("Postgres");
-        _connectionString =
-            $"Host={pg["Host"] ?? "localhost"};" +
+        return $"Host={pg["Host"] ?? "localhost"};" +
             $"Port={pg["Port"] ?? "5432"};" +
             $"Database={pg["Database"] ?? "gitxo"};" +
             $"Username={pg["Username"] ?? "postgres"};" +
