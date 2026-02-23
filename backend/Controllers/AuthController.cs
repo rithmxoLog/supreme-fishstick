@@ -20,17 +20,16 @@ public class AuthController : ControllerBase
     }
 
     // POST /api/auth/register
-    // Open when no users exist (first admin); otherwise requires an existing admin.
+    // Open when no users exist (first admin); otherwise requires any authenticated user.
     [HttpPost("register")]
     [EnableRateLimiting("auth")]
     public async Task<IActionResult> Register([FromBody] RegisterRequest body)
     {
-        var callerIsAdmin = User.Identity?.IsAuthenticated == true &&
-                            User.FindFirstValue("is_admin") == "true";
+        var callerIsAuthenticated = User.Identity?.IsAuthenticated == true;
 
         var totalUsers = await _auth.GetTotalUsersAsync();
-        if (totalUsers > 0 && !callerIsAdmin)
-            return Unauthorized(new { error = "Registration requires an administrator account" });
+        if (totalUsers > 0 && !callerIsAuthenticated)
+            return Unauthorized(new { error = "You must be signed in to create a new user" });
 
         var (success, error, user, _) = await _auth.RegisterAsync(body.Username, body.Email, body.Password);
         if (!success)

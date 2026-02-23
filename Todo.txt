@@ -6,150 +6,6 @@ Repo creation, deletion, cloning URLs
 
 
 Essential pages:
-
-User login
-Browse repos
-View files / directories
-View commits
-Diff viewer (you can use libraries for this)
-Issues UI (optional)
-
-Utilize the following technologies:
-PostgreSQL (best all-around)
-
-Tables you’ll need:
-Users
-Repositories
-Issues (optional)
-
-
-
-
---test uploading and downloading zip functionality make sure code is appearing and disappearing appropriately, 
-
---functioning auth token login system, times out and make sure data is appropriately updated. 
-
---basics for GitHub settings functionality and fully implemented and working
-
---make sure when signing in DATA BASE is getting appropriate calls
-
-Can all registered users see the same public directories that are supposedly persistence in the back end directory? We need to implement this if it is currently not working. Then, we need to make it where both the front end and back end create private repos in a local separate folder in the backend. 
-
---Implement ALL basic settings functionality that is most similar to real GitHub, change both the backend and front code to do this
-
---Implement current settings to be saved per user
-
---Make a fully functioning auth token system and give a new complete data base schema to reflect this, make it where. Make sure both the front end code and back end code accurately reflect each other and the current data base schema 
-
-
-
-
-
-
-
---Make sure when users upload their zipped code, that once uploaded the background unzips the files and puts them into the repo, make sure node modules are ignored when uploading when clicking a direct folder
-
-
-go through my code and add the functioanlity for users to delete public respositories
-
-I want you to scan all the claude xontexts in the docs folder and then adapt my front end and back end to work with the tech stack that is being used as outlined in the docs as it pertains to my new service (gitripp) that I'm trying to implement into the already existing project. Tell me what I need to set up and configure
-
-
-TODO2
---uploading and downloading zip functionality that ignores the compiled node modules folder
-
---basics for GitHub settings functionality and fully implemented and working
-
-Priority	Issue	Fix
-1	/ is behind PrivateRoute — public can't browse	Remove PrivateRoute wrapper on the / route
-2	No /register route	Add <Route path="/register" element={<RegisterPage />} /> to App.js
-3	Clone URL is dead	Remove or replace with a note; ZIP download works fine
-4	File write ops don't check collaborator write permission	Call UserCanWriteAsync in FilesController.SaveFile and Push
-5	Push tab visible to non-owners	Conditionally hide Push tab if user is not owner/collaborator
-6	Branch comparison diff	Add GET /api/repos/{name}/diff?from=branch1&to=branch2 endpoint using git diff
-7	Pull requests / merge UI	Add PR table + endpoints + frontend tab (large feature)
-
-
-Clone feature
-Branch Comparison diff 
-pull requests and merge branch
-private repos and public repos do they accurately update in the local backend file folder, and is their permission handling is it presisstent. 
-
-5. The Clone URL Problem — What Needs to Happen
-The clone URL displayed (/api/git/{name}.git) does not work. For real git clone to function you need one of:
-
-Option A — Git Smart HTTP (add to ASP.NET backend):
-Proxy requests through git http-backend CGI. This is complex on Windows and requires CGI support.
-
-Option B — Gitea/soft-serve alongside (recommended for self-hosted):
-Run a dedicated git server like soft-serve (SSH) alongside GitXO for the actual git protocol. GitXO handles the web UI; soft-serve handles git clone/push/pull.
-
-Option C — For now, document the ZIP download:
-The existing GET /api/repos/{name}/download?branch=main ZIP endpoint is the only working "download entire repo" mechanism. The clone URL should either be removed from the UI or clearly labeled as "coming soon."
-
-6. Summary of What to Fix / Add (Priority Order)
-Priority	Issue	Fix
-1	/ is behind PrivateRoute — public can't browse	Remove PrivateRoute wrapper on the / route
-2	No /register route	Add <Route path="/register" element={<RegisterPage />} /> to App.js
-3	Clone URL is dead	Remove or replace with a note; ZIP download works fine
-4	File write ops don't check collaborator write permission	Call UserCanWriteAsync in FilesController.SaveFile and Push
-5	Push tab visible to non-owners	Conditionally hide Push tab if user is not owner/collaborator
-6	Branch comparison diff	Add GET /api/repos/{name}/diff?from=branch1&to=branch2 endpoint using git diff
-7	Pull requests / merge UI	Add PR table + endpoints + frontend tab (large feature)
-8	SSH key management	Add ssh_keys table + UI for users to paste public keys
-The core architecture — ASP.NET Core + PostgreSQL + git CLI + React — is solid and all the right pieces are in place. The two most impactful things to fix right now are the public browse page (1-line change in App.js) and the missing /register route.
-
-
-
- q
-
-
-tests 
---Uploading and Downloading after unzipped does the front end file browser actively reflect the uploaded content of the uploaded zip, is it saved locally appropriately and persistently. 
---User permissions and public repo appropriately work
---auth token sign in system that appropriately expires
-
-
-
-Commit, push, pull, merge, browse repos, issues, Diff rendering, Branch comparison, Diff generation
-
-
-
-first
---git clone via http using git http-backend CGI 
-
---uploading and downloading files with ease once a window opens to ask you the folder you want to upload/download. Once uploaded the backend zips the file contents and maintains the file integrity in the backend local directory. 
-
---What would 
-
-
-
-Add a claude context md to note that my current project is the following:
---At the entire of every claude message, I want this context md to be documented with the appropriate changes that were made per conversation
---The repos for the users are stored and updated in the back-end folder repositories
---A basic version of GitHub that is called gitripp, security isn't really a priority at the moment. 
---has a fully functioning auth-token system to handle login times and logs-out user accounts using standard protocol
---Analyze my code base list the currently working tech stack and libraries.
---That version control is done entirely through clicking on a folder to upload it, the backend then zips it and then unzips it. node modules are ignored. The user doesn't have to zip the folder that they want to upload to the repo. They are given a dialogue of which folder they want to upload, for simplicity. When they download a repo or version of the software, they are given a zip. 
---Goals for gitripp User auth, Repo creation, deletion, cloning URLs, User login, Browse repos, View files / directories, View commits, Diff viewer, Issues UI
---When users "pull", it downloads a zip of whatever 
-
-Additional Wanted Features:
-Syntax highlighting → e.g., highlight.js, CodeMirror, Monaco
-Diff rendering → libraries like diff2html or custom Git diffs via CLI
-Branch comparison
-Diff generation
-
-
-
-TODO1
-I want you to analyze the front end and the backend of my codebase and then I want you to tell me if there is code for  maintaining files changes on the local backend level, when someone uploads or downloads there repo to the respective git repo. Include a main page where EVERYONE can see the repos that are created and are public to everyone. give any other technologies and database scehma that is need. Additional Features and Adjustments:
-
-User auth
-Repo creation, deletion, cloning URLs
-
-
-Essential pages:
 User login
 Browse repos
 View files / directories
@@ -282,3 +138,36 @@ Diff rendering → libraries like diff2html or custom Git diffs via CLI
 Branch comparison
 Diff generation
 
+
+
+Feature Sets
+
+Commit, push, pull, merge, browse repos, issues, Diff rendering, Branch comparison, Diff generation
+
+
+User auth
+Repo creation, deletion, cloning URLs
+
+
+Essential pages:
+User login
+Browse repos
+View files / directories
+View commits
+Diff viewer (you can use libraries for this)
+Issues UI (optional)
+
+Utilize the following technologies:
+PostgreSQL (best all-around)
+
+Tables you’ll need:
+Users
+Repositories
+Issues (optional)
+
+
+Additional Wanted Features:
+Syntax highlighting → e.g., highlight.js, CodeMirror, Monaco
+Diff rendering → libraries like diff2html or custom Git diffs via CLI
+Branch comparison
+Diff generation

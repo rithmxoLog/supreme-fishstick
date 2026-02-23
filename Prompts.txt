@@ -1,5 +1,5 @@
 Context UPDATE:
 Take everything in this conversation and update the changelog in ClaudeContext.md comphrehensively to reflect features and alterations that were made.
 
-Update Context.md file based on current file/folder/project structure:
+Update ClaudeContextGitXO.md file based on current file/folder/project structure:
 go through all my current project files and explain their functionality to ClaudeContextGitXO.md, add a new section to the md file

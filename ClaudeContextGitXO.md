@@ -887,3 +887,43 @@ Internal identifiers left unchanged (localStorage keys `gitxo_access_token`/`git
 
 #### What you need to do
 Nothing — frontend will hot-reload automatically if the dev server is running.
+
+---
+
+### 2026-02-23
+
+#### Registration: Any Signed-In User Can Add New Users, No Public Registration
+
+**Problem:** A standalone `RegisterPage.js` existed as dead code (no route in `App.js`), the backend password minimum (12 characters) was inconsistent with the frontend forms (8 characters), and the "Add user" form was hidden inside the admin-only tab — only admins could create new users.
+
+**Changes:**
+
+- **[frontend/src/pages/RegisterPage.js]** Deleted. This file was orphaned — it had no route in `App.js` and was never reachable by users.
+
+- **[backend/Services/AuthService.cs]** Changed password minimum in `RegisterAsync` from 12 → 8 characters to match the frontend validation and the `ChangePasswordAsync` minimum.
+
+- **[backend/Controllers/AuthController.cs]** Changed `POST /api/auth/register` authorization: now allows **any authenticated user** to create new users (previously required admin). The check changed from `callerIsAdmin` to `callerIsAuthenticated`. Unauthenticated requests are still rejected when users exist.
+
+- **[frontend/src/pages/SettingsPage.js]**
+  - Extracted the "Add user" form out of `AdminTab` into a new `AddUserTab` component.
+  - Added "Add User" as a sidebar tab visible to **all signed-in users** (not just admins).
+  - `AdminTab` now only contains the user list with delete buttons (admin-only).
+
+**Registration flow summary:** The first user to register becomes admin (bootstrap). After that, any signed-in user can create new users via **Settings → Add User**. There is no public-facing registration page. Admins additionally see **Settings → Admin — Users** for listing/deleting users.
+
+#### What you need to do
+1. Restart the backend server to pick up the auth and password changes.
+2. Nothing else — frontend will hot-reload automatically.
+
+---
+
+#### Documentation: Recovery & Backup Guides
+
+**Changes:**
+
+- **[docs/RECOVERY-GUIDE.md]** Created. Step-by-step recovery procedures for 9 crash scenarios: backend crash, frontend crash, PostgreSQL down, database wipe, all users lost, repos missing, JWT secret changed, account lockout, and full system recovery. Includes quick reference table (paths, credentials, ports), recovery flowchart, and post-recovery verification checklist.
+
+- **[docs/BACKUP-GUIDE.md]** Created. Covers what to back up (database, repos, config), how to do manual and scheduled backups on both Windows and Linux, how to verify backup integrity, restore from backups, and what data is lost without backups. Includes recommended backup schedule and storage estimates.
+
+#### What you need to do
+Nothing — documentation-only change, no code modified.

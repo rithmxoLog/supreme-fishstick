@@ -9,6 +9,14 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.WebHost.UseUrls(builder.Configuration["Urls"] ?? "http://localhost:3001");
 
+// Raise Kestrel's hard body-size cap so large ZIP/push uploads aren't
+// connection-reset before the per-endpoint [RequestSizeLimit] filter runs.
+builder.WebHost.ConfigureKestrel(k => k.Limits.MaxRequestBodySize = 200 * 1024 * 1024);
+
+// Raise the multipart-form parser limit (default 128 MB) to match.
+builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(o =>
+    o.MultipartBodyLengthLimit = 200 * 1024 * 1024);
+
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(p => p
         .AllowAnyOrigin()

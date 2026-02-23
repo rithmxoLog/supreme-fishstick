@@ -324,18 +324,61 @@ function PreferencesTab({ user }) {
   );
 }
 
-// ─── TAB: Admin — User Management ────────────────────────────────────────────
+// ─── TAB: Add User (visible to all signed-in users) ─────────────────────────
+function AddUserTab() {
+  const [username, setUsername] = useState('');
+  const [email,    setEmail]    = useState('');
+  const [password, setPassword] = useState('');
+  const [msg,      setMsg]      = useState('');
+  const [err,      setErr]      = useState('');
+  const [busy,     setBusy]     = useState(false);
+
+  const addUser = async (e) => {
+    e.preventDefault();
+    setMsg(''); setErr(''); setBusy(true);
+    try {
+      const data = await api.register(username.trim(), email.trim(), password);
+      setMsg(`User "${data.user.username}" created successfully.`);
+      setUsername(''); setEmail(''); setPassword('');
+    } catch (ex) { setErr(ex.message); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <SectionCard title="Add user" subtitle="Create a new account. The user can sign in immediately.">
+      <Banner type="success" msg={msg} />
+      <Banner type="error"   msg={err} />
+      <form onSubmit={addUser} style={{ maxWidth: 400 }}>
+        <div className="form-group">
+          <label className="form-label">Username</label>
+          <input className="form-input" value={username} onChange={e => setUsername(e.target.value)}
+            required placeholder="e.g. johndoe" pattern="[a-zA-Z0-9_\-]{3,30}"
+            title="3–30 alphanumeric, dashes, or underscores" />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Email address</label>
+          <input className="form-input" type="email" value={email} onChange={e => setEmail(e.target.value)} required autoComplete="off" />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Password</label>
+          <input className="form-input" type="password" value={password} onChange={e => setPassword(e.target.value)}
+            required minLength={8} autoComplete="new-password" />
+          <small style={{ color: 'var(--text-secondary)', fontSize: 12 }}>Minimum 8 characters.</small>
+        </div>
+        <button type="submit" className="btn btn-primary" disabled={busy}>
+          {busy ? <><span className="spinner" /> Creating…</> : 'Create user'}
+        </button>
+      </form>
+    </SectionCard>
+  );
+}
+
+// ─── TAB: Admin — User Management (admin only) ──────────────────────────────
 function AdminTab({ currentUser }) {
   const [users,   setUsers]   = useState([]);
   const [loading, setLoading] = useState(true);
   const [err,     setErr]     = useState('');
   const [msg,     setMsg]     = useState('');
-
-  // Add user form
-  const [username, setUsername] = useState('');
-  const [email,    setEmail]    = useState('');
-  const [password, setPassword] = useState('');
-  const [addBusy,  setAddBusy]  = useState(false);
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -345,18 +388,6 @@ function AdminTab({ currentUser }) {
   }, []);
 
   useEffect(() => { loadUsers(); }, [loadUsers]);
-
-  const addUser = async (e) => {
-    e.preventDefault();
-    setMsg(''); setErr(''); setAddBusy(true);
-    try {
-      const data = await api.register(username.trim(), email.trim(), password);
-      setMsg(`User "${data.user.username}" created successfully.`);
-      setUsername(''); setEmail(''); setPassword('');
-      loadUsers();
-    } catch (ex) { setErr(ex.message); }
-    finally { setAddBusy(false); }
-  };
 
   const deleteUser = async (id, uname) => {
     if (!window.confirm(`Delete user "${uname}"? This cannot be undone.`)) return;
@@ -368,62 +399,37 @@ function AdminTab({ currentUser }) {
   };
 
   return (
-    <>
-      <SectionCard title="Add user" subtitle="Create a new account. The user can sign in immediately.">
-        <Banner type="success" msg={msg} />
-        <Banner type="error"   msg={err} />
-        <form onSubmit={addUser} style={{ maxWidth: 400 }}>
-          <div className="form-group">
-            <label className="form-label">Username</label>
-            <input className="form-input" value={username} onChange={e => setUsername(e.target.value)}
-              required placeholder="e.g. johndoe" pattern="[a-zA-Z0-9_\-]{3,30}"
-              title="3–30 alphanumeric, dashes, or underscores" />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Email address</label>
-            <input className="form-input" type="email" value={email} onChange={e => setEmail(e.target.value)} required autoComplete="off" />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Password</label>
-            <input className="form-input" type="password" value={password} onChange={e => setPassword(e.target.value)}
-              required minLength={8} autoComplete="new-password" />
-          </div>
-          <button type="submit" className="btn btn-primary" disabled={addBusy}>
-            {addBusy ? <><span className="spinner" /> Creating…</> : 'Create user'}
-          </button>
-        </form>
-      </SectionCard>
-
-      <SectionCard title="All users">
-        {loading ? (
-          <p style={{ color: 'var(--text-secondary)', fontSize: 14 }}>Loading users…</p>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {users.map(u => (
-              <div key={u.id} style={{
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                padding: '10px 16px', background: 'var(--bg-overlay)',
-                border: '1px solid var(--border)', borderRadius: 'var(--radius)'
-              }}>
-                <div>
-                  <span style={{ fontWeight: 600, fontSize: 14 }}>{u.username}</span>
-                  {u.isAdmin && <span style={{ marginLeft: 8, fontSize: 11, background: '#9a6700', color: '#fff', borderRadius: 999, padding: '2px 6px' }}>Admin</span>}
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>{u.email}</div>
-                </div>
-                {u.id !== currentUser?.id && (
-                  <button className="btn btn-danger btn-sm" onClick={() => deleteUser(u.id, u.username)}>
-                    Delete
-                  </button>
-                )}
-                {u.id === currentUser?.id && (
-                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>You</span>
-                )}
+    <SectionCard title="All users">
+      {msg && <Banner type="success" msg={msg} />}
+      {err && <Banner type="error" msg={err} />}
+      {loading ? (
+        <p style={{ color: 'var(--text-secondary)', fontSize: 14 }}>Loading users…</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {users.map(u => (
+            <div key={u.id} style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '10px 16px', background: 'var(--bg-overlay)',
+              border: '1px solid var(--border)', borderRadius: 'var(--radius)'
+            }}>
+              <div>
+                <span style={{ fontWeight: 600, fontSize: 14 }}>{u.username}</span>
+                {u.isAdmin && <span style={{ marginLeft: 8, fontSize: 11, background: '#9a6700', color: '#fff', borderRadius: 999, padding: '2px 6px' }}>Admin</span>}
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>{u.email}</div>
               </div>
-            ))}
-          </div>
-        )}
-      </SectionCard>
-    </>
+              {u.id !== currentUser?.id && (
+                <button className="btn btn-danger btn-sm" onClick={() => deleteUser(u.id, u.username)}>
+                  Delete
+                </button>
+              )}
+              {u.id === currentUser?.id && (
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>You</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </SectionCard>
   );
 }
 
@@ -437,6 +443,7 @@ export default function SettingsPage() {
     { id: 'account',     label: 'Account' },
     { id: 'security',    label: 'Security' },
     { id: 'preferences', label: 'Preferences' },
+    { id: 'adduser',     label: 'Add User' },
     ...(user?.isAdmin ? [{ id: 'admin', label: 'Admin — Users' }] : [])
   ];
 
@@ -465,6 +472,7 @@ export default function SettingsPage() {
           {tab === 'account'     && <AccountTab user={user} logout={logout} />}
           {tab === 'security'    && <SecurityTab />}
           {tab === 'preferences' && <PreferencesTab user={user} />}
+          {tab === 'adduser'     && <AddUserTab />}
           {tab === 'admin'       && user?.isAdmin && <AdminTab currentUser={user} />}
         </div>
       </div>

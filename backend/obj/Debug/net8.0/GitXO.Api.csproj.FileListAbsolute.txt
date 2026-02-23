@@ -69,3 +69,5 @@ C:\Users\LoganCarpenter\Documents\GitXO\backend\bin\Debug\net8.0\Microsoft.Ident
 C:\Users\LoganCarpenter\Documents\GitXO\backend\bin\Debug\net8.0\Microsoft.IdentityModel.Tokens.dll
 C:\Users\LoganCarpenter\Documents\GitXO\backend\bin\Debug\net8.0\System.IdentityModel.Tokens.Jwt.dll
 C:\Users\LoganCarpenter\Documents\GitXO\backend\obj\Debug\net8.0\GitXO.Api.sourcelink.json
+C:\Users\LoganCarpenter\Documents\GitXO\backend\bin\Debug\net8.0\repositories\private-test.meta.json
+C:\Users\LoganCarpenter\Documents\GitXO\backend\bin\Debug\net8.0\repositories\PublicTest1.meta.json

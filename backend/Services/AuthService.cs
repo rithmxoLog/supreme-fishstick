@@ -44,8 +44,8 @@ public class AuthService
             return (false, "Username must be 3–30 alphanumeric characters, dashes, or underscores", null, null);
         if (string.IsNullOrWhiteSpace(email) || !email.Contains('@'))
             return (false, "Invalid email address", null, null);
-        if (string.IsNullOrWhiteSpace(password) || password.Length < 12)
-            return (false, "Password must be at least 12 characters", null, null);
+        if (string.IsNullOrWhiteSpace(password) || password.Length < 8)
+            return (false, "Password must be at least 8 characters", null, null);
 
         var hash = BCrypt.Net.BCrypt.HashPassword(password);
 
