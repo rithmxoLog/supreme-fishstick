@@ -65,16 +65,29 @@ builder.Services.AddSingleton<AuthService>();
 builder.Services.AddSingleton<RepoDbService>();
 
 // Resolve and ensure repository directories exist
+
 static string ResolveDir(IConfiguration cfg, string key, string fallback)
 {
-    var dir = cfg[key] ?? fallback;
-    if (!Path.IsPathRooted(dir))
-        dir = Path.GetFullPath(dir, Directory.GetCurrentDirectory());
-    if (!Directory.Exists(dir))
-        Directory.CreateDirectory(dir);
-    cfg[key] = dir;
-    return dir;
+    // Use Addy's writeable data directory
+    var dataDir = Environment.GetEnvironmentVariable("RITHM_DATA_DIR");
+
+    if (string.IsNullOrWhiteSpace(dataDir))
+    {
+        // local development fallback
+        dataDir = Path.Combine(AppContext.BaseDirectory, "..", "data");
+    }
+
+    // All repo paths MUST go under the writable data dir
+    var finalPath = Path.Combine(dataDir, fallback);
+
+    Directory.CreateDirectory(finalPath);
+
+    // update config so the app prints correct paths
+    cfg[key] = finalPath;
+
+    return finalPath;
 }
+
 
 var reposDir        = ResolveDir(builder.Configuration, "ReposDirectory",        "repositories");
 var privateReposDir = ResolveDir(builder.Configuration, "PrivateReposDirectory", "repositories-private");
