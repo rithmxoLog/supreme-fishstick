@@ -2,6 +2,9 @@
   "name": "gitxo-backend",
   "version": "1.0.0",
   "description": "GitXO C# backend — use 'npm start' or 'dotnet run' to start",
+  "dependencies": {
+    "yaml": "2.8.2"
+  },
   "scripts": {
     "start": "dotnet run"
   }
