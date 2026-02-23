@@ -3,7 +3,7 @@
   "framework": "node",
   "isDualServer": true,
 
-  "buildCommand": "cd frontend && npm ci && npm run build && mkdir -p ../backend/public && cp -r build/* ../backend/public/ && cd ../backend && dotnet publish -c Release -o ./publish",
+  "buildCommand": "cd frontend && npm ci && npm run build && mkdir -p ../backend/public && cp -r build/* ../backend/public/ && cd ../backend && dotnet publish -c Release -o ../",
 
-  "startCommand": "cd backend/publish && dotnet GitXO.Api.dll"
+  "startCommand": "dotnet GitXO.Api.dll"
 }
