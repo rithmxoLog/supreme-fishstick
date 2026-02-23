@@ -71,3 +71,4 @@ C:\Users\LoganCarpenter\Documents\GitXO\backend\bin\Debug\net8.0\System.Identity
 C:\Users\LoganCarpenter\Documents\GitXO\backend\obj\Debug\net8.0\GitXO.Api.sourcelink.json
 C:\Users\LoganCarpenter\Documents\GitXO\backend\bin\Debug\net8.0\repositories\private-test.meta.json
 C:\Users\LoganCarpenter\Documents\GitXO\backend\bin\Debug\net8.0\repositories\PublicTest1.meta.json
+C:\Users\LoganCarpenter\Documents\GitXO\backend\bin\Debug\net8.0\package-lock.json
