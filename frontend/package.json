@@ -10,7 +10,8 @@
     "react-router-dom": "^6.21.1",
     "react-scripts": "5.0.1",
     "react-syntax-highlighter": "^15.5.0",
-    "timeago.js": "^4.0.2"
+    "timeago.js": "^4.0.2",
+    "yaml": "2.8.2"
   },
   "scripts": {
     "start": "craco start",
