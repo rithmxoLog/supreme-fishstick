@@ -1,10 +1,6 @@
 {
   "name": "gitripp",
-  "framework": "node",
-
-  "isDualServer": false,
-
-  "buildCommand": "cd frontend && npm ci && npm run build && mkdir -p ../backend/public && cp -r build/* ../backend/public/ && cd ../backend && dotnet publish -c Release -o ../",
-
-  "startCommand": "./GitXO.Api"
+  "framework": "dotnet",
+  "buildCommand": "dotnet publish backend/GitXO.Api.csproj -c Release -o ./publish",
+  "startCommand": "cd publish && ./GitXO.Api"
 }

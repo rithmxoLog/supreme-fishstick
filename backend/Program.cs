@@ -8,7 +8,7 @@ using Microsoft.IdentityModel.Tokens;
 var builder = WebApplication.CreateBuilder(args);
 
 var appPort = Environment.GetEnvironmentVariable("APP_PORT") ?? "3001";
-builder.WebHost.UseUrls($"http://localhost:{appPort}");
+builder.WebHost.UseUrls($"http://*:{appPort}");
 
 // Raise Kestrel's hard body-size cap so large ZIP/push uploads aren't
 // connection-reset before the per-endpoint [RequestSizeLimit] filter runs.
@@ -95,9 +95,37 @@ var privateReposDir = ResolveDir(builder.Configuration, "PrivateReposDirectory",
 
 var app = builder.Build();
 
-// Test DB connection at startup
+// Test DB connection and run schema migration at startup
 var dbLogger = app.Services.GetRequiredService<ActivityLogger>();
 await dbLogger.TestConnectionAsync();
+
+// Apply embedded SQL migration (all statements are idempotent with IF NOT EXISTS)
+try
+{
+    var connStr = builder.Configuration.GetConnectionString("DefaultConnection")
+        ?? $"Host={builder.Configuration["Postgres:Host"] ?? "localhost"};" +
+           $"Port={builder.Configuration["Postgres:Port"] ?? "5432"};" +
+           $"Database={builder.Configuration["Postgres:Database"] ?? "gitxo"};" +
+           $"Username={builder.Configuration["Postgres:Username"] ?? "postgres"};" +
+           $"Password={builder.Configuration["Postgres:Password"] ?? ""}";
+
+    using var migrationStream = typeof(Program).Assembly
+        .GetManifestResourceStream("GitXO.Api.Migrations.001_schema.sql");
+    if (migrationStream is not null)
+    {
+        using var reader = new StreamReader(migrationStream);
+        var sql = await reader.ReadToEndAsync();
+        await using var conn = new Npgsql.NpgsqlConnection(connStr);
+        await conn.OpenAsync();
+        await using var cmd = new Npgsql.NpgsqlCommand(sql, conn);
+        await cmd.ExecuteNonQueryAsync();
+        Console.WriteLine("Database schema migration applied successfully.");
+    }
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"Warning: Schema migration failed — {ex.Message}");
+}
 
 app.UseCors();
 
