@@ -1,6 +1,0 @@
-{
-  "name": "gitripp",
-  "framework": "dotnet",
-  "buildCommand": "dotnet publish backend/GitXO.Api.csproj -c Release -o ./publish",
-  "startCommand": "cd publish && ./GitXO.Api"
-}

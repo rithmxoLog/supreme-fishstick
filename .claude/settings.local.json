@@ -17,7 +17,11 @@
       "Bash(psql:*)",
       "Bash(where:*)",
       "Bash(\"/c/Program Files/PostgreSQL/18/bin/psql.exe\" -U postgres -d gitxo -f backend/Migrations/002_refresh_tokens.sql)",
-      "Bash(PGPASSWORD='Skrillex123#' psql:*)"
+      "Bash(PGPASSWORD='Skrillex123#' psql:*)",
+      "Bash(tailwind)",
+      "Bash(postcss:*)",
+      "Bash(.env)",
+      "Bash(public \")"
     ]
   }
 }
